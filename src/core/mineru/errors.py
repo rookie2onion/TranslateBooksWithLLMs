@@ -171,3 +171,14 @@ class MineruOutputInvalid(MineruError):
     """The generated translated PDF failed its validation."""
 
     code = "mineru_output_invalid"
+
+
+class MineruCompletionInvalid(MineruOutputInvalid):
+    """A published PDF/report does not prove whole-book completion.
+
+    The artifact may exist and be structurally valid, but its durable accounting
+    cannot establish exact source-page coverage and complete block accounting, so
+    the task must not be reported as a successfully completed book.
+    """
+
+    code = "mineru_completion_invalid"

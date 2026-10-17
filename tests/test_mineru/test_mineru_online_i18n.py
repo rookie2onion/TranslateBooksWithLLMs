@@ -84,7 +84,13 @@ NEW_KEYS = [
     "mineru_error_result_invalid",
     "mineru_error_unsupported_content",
     "mineru_error_output_invalid",
+    "mineru_error_completion_invalid",
     "completion_source_preserved",
+    "completion_pdf_coverage",
+    "completion_pdf_empty_pages",
+    "completion_pdf_limitations",
+    "completion_download_report",
+    "history_download_report",
 ]
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
@@ -163,3 +169,25 @@ def test_the_source_preserved_summary_is_rendered_reactively():
     # Same completion card, same localeChanged re-render path as the other
     # stats: the string follows a language switch with no page reload.
     assert "localeChanged" in source
+
+
+def test_whole_book_coverage_and_report_download_are_wired_reactively():
+    tracker = TRANSLATION_TRACKER_JS.read_text(encoding="utf-8")
+    assert "completion_pdf_coverage" in tracker
+    assert "completion_pdf_empty_pages" in tracker
+    assert "completion_pdf_limitations" in tracker
+    assert "completion_download_report" in tracker
+    assert "getAccountingDownloadUrl" in tracker
+
+    history = RESUME_JS.parent.joinpath("history-manager.js").read_text(
+        encoding="utf-8")
+    assert "history_download_report" in history
+    assert "getAccountingDownloadUrl" in history
+    # The history list rebuilds on localeChanged, so the new action label is
+    # reactive without a reload.
+    assert "localeChanged" in history
+
+    client = (ROOT / "src" / "web" / "static" / "js" / "core" /
+              "api-client.js").read_text(encoding="utf-8")
+    assert "getAccountingDownloadUrl" in client
+    assert "/accounting" in client

@@ -412,23 +412,14 @@ class CheckpointManager:
         Returns:
             Tuple of (jobs_deleted, files_cleaned)
         """
-        # Get list of old job IDs before deletion (for file cleanup)
+        # Get list of old job IDs before deletion (for file cleanup). The
+        # database's retention query includes completed rows too: a completed
+        # job's task-owned working directory may still hold recognition files
+        # if an earlier prune could not remove them, while its finished output
+        # and accounting report live outside uploads/ and are never touched.
         old_jobs = []
         try:
-            from datetime import datetime, timedelta
-            cutoff = datetime.now() - timedelta(days=max_age_days)
-
-            # Get jobs that will be deleted
-            all_jobs = self.db.get_resumable_jobs(max_age_days=9999)  # Get all
-            for job in all_jobs:
-                created_str = job.get('created_at', '')
-                if created_str:
-                    try:
-                        created = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
-                        if created.replace(tzinfo=None) < cutoff:
-                            old_jobs.append(job['translation_id'])
-                    except (ValueError, TypeError):
-                        pass
+            old_jobs = self.db.get_expired_job_ids(max_age_days)
         except Exception as e:
             print(f"Warning: Error getting old job list: {e}")
 

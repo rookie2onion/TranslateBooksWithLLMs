@@ -109,6 +109,10 @@
   "completion_card_dismiss": "Dismiss",
   "completion_failed_chunks": "{{count}} failed",
   "completion_source_preserved": "{{count}} source-preserved image(s) kept untranslated",
+  "completion_pdf_coverage": "Whole-book coverage: {{pages}}/{{expected}} source pages, {{accounted}}/{{recognized}} blocks accounted",
+  "completion_pdf_empty_pages": "{{count}} empty recognized page(s) represented",
+  "completion_pdf_limitations": "The accounting report proves page and block coverage and completion of the translated body for recognized text. It does not prove recognition accuracy or translate text inside source-preserved images and image pixels.",
+  "completion_download_report": "Download accounting report",
   "completion_fallback_chunks": "{{count}} formatting fallback(s)",
   "completion_placeholder_errors": "{{count}} formatting issue(s)",
   "completion_paragraph_realigned": "{{count}} paragraph realignment(s)",
@@ -216,6 +220,7 @@
   "history_chunks": "{{completed}} / {{total}} chunks",
   "history_output_missing": "Output file no longer available",
   "history_type_line": "Type: {{type}}",
+  "history_download_report": "Accounting report",
 
   "file_list_cleared": "File list cleared",
   "form_reset_log": "Form and file list reset.",
@@ -317,5 +322,6 @@
   "mineru_error_provider_rejected": "MinerU rejected the recognition request. Check the configured token and the source document.",
   "mineru_error_result_invalid": "The recognition result did not match this PDF or was incomplete, so no book was produced.",
   "mineru_error_output_invalid": "The translated PDF failed validation, so it was not published.",
+  "mineru_error_completion_invalid": "The translated PDF was kept, but its content accounting did not prove whole-book coverage, so the task was not reported as complete.",
   "mineru_error_unsupported_content": "This PDF contains recognised content the application cannot preserve reliably yet (for example an inline formula), so no book was produced. The source PDF is unchanged."
 }

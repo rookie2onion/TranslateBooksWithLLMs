@@ -111,6 +111,23 @@ export const HistoryManager = {
             actionsContainer.appendChild(missing);
         }
 
+        // The durable accounting report is available only while the output and
+        // sidecar both exist (the server-derived flag). It is a separate
+        // download, not a substitute for the translated book.
+        if (item.accounting_available && item.translation_id) {
+            const reportButton = document.createElement('button');
+            reportButton.type = 'button';
+            reportButton.className = 'btn btn-secondary';
+            reportButton.style.marginLeft = '8px';
+            reportButton.innerHTML = '<span class="material-symbols-outlined">receipt_long</span> '
+                + t('translation:history_download_report');
+            reportButton.addEventListener('click', () => {
+                window.location.href = ApiClient.getAccountingDownloadUrl(
+                    item.translation_id);
+            });
+            actionsContainer.appendChild(reportButton);
+        }
+
         return card;
     },
 

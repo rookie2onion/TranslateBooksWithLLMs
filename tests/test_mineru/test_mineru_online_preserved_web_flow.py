@@ -203,13 +203,36 @@ def _mixed_pages():
     ]
 
 
+def _wait_for_completion_event(web, translation_id, timeout=30):
+    """Wait until the completion payload carrying the accounting is emitted.
+
+    A terminal status poll and the completion socket event are separate
+    observations; tests that assert on the payload must wait for it rather than
+    infer it from the status. The server publishes the event before the
+    terminal status, so this normally returns on the first check.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for event, data, _ in web.socketio.events:
+            if (event == "translation_update" and isinstance(data, dict)
+                    and data.get("translation_id") == translation_id
+                    and data.get("status") == "completed"
+                    and data.get("accounting")):
+                return data
+        time.sleep(0.01)
+    raise AssertionError("completion payload with accounting was not emitted")
+
+
 def _completed_job(web, *, pages, output_filename="book (French).pdf"):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=len(pages))
     web.http.zip_bytes = result_zip_bytes(page_count=len(pages), pages=pages)
     upload = _upload(web, source)
     response = _start(web, upload, output_filename=output_filename)
     assert response.status_code == 200, response.get_json()
-    return _wait_for_terminal(web, response.get_json()["translation_id"])
+    translation_id = response.get_json()["translation_id"]
+    status = _wait_for_terminal(web, translation_id)
+    _wait_for_completion_event(web, translation_id)
+    return status
 
 
 def test_scripted_table_and_formula_result_reaches_pdf_download_and_accounting(web):

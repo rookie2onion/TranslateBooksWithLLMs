@@ -8,7 +8,7 @@ import re
 import time
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
 import src.config as _config
 from src.api.api_keys import USE_ENV_SENTINEL
@@ -25,7 +25,7 @@ from src.config import (
 )
 from src.core.mineru.admission import admit_pdf_source
 from src.core.mineru.errors import MineruError
-from src.core.pdf.accounting import read_accounting_summary
+from src.core.pdf.accounting import accounting_path_for, read_accounting_summary
 from src.tts.tts_config import TTSConfig
 
 logger = logging.getLogger('translation_routes')
@@ -236,15 +236,41 @@ _HISTORY_FIELDS = (
 )
 
 
-def _history_item(job):
+def _history_item(job, output_dir=None):
     """Project a completed job onto the fields the browser is allowed to see.
 
     Built as an allowlist, never by deleting keys from a copy of the job: the
     stored config carries the server's filesystem layout ('file_path'), the
     provider endpoints and the API keys resolved from .env, and a denylist
     would silently leak whatever field gets added to it next (issue #271).
+
+    ``accounting_available`` is derived server-side from the output/report pair,
+    so the browser learns whether a durable report can be downloaded without
+    receiving a server filesystem path.
     """
-    return {field: job.get(field) for field in _HISTORY_FIELDS}
+    item = {field: job.get(field) for field in _HISTORY_FIELDS}
+    config = job.get('config') or {}
+    item['accounting_available'] = bool(
+        output_dir
+        and _accounting_report_path(output_dir, config.get('output_filename'))
+    )
+    return item
+
+
+def _accounting_report_path(output_dir, output_filename):
+    """Return the durable report path when the output and report both exist."""
+    if not output_filename or not output_dir:
+        return None
+    name = Path(str(output_filename)).name
+    if name != str(output_filename):
+        return None
+    output_path = Path(output_dir) / name
+    if not PathValidator.is_within_directory(output_path, output_dir):
+        return None
+    report_path = accounting_path_for(output_path)
+    if output_path.is_file() and report_path.is_file():
+        return report_path
+    return None
 
 
 def _validate_provider_credentials(config):
@@ -517,8 +543,14 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         # Create translation in state manager
         state_manager.create_translation(translation_id, config)
 
-        # Start translation job
-        start_translation_job(translation_id, config)
+        # Start translation job. The new job already holds its single execution
+        # claim; if the worker cannot even be started, release it so a later
+        # Continue is not refused forever by an abandoned in-memory claim.
+        try:
+            start_translation_job(translation_id, config)
+        except Exception:
+            state_manager.release_execution(translation_id)
+            raise
 
         return jsonify({
             "translation_id": translation_id,
@@ -637,7 +669,9 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             return jsonify({"error": "Invalid limit"}), 400
 
         jobs = state_manager.checkpoint_manager.get_job_history(limit)
-        return jsonify({"history": [_history_item(job) for job in jobs]})
+        return jsonify({
+            "history": [_history_item(job, output_dir) for job in jobs]
+        })
 
     @bp.route('/api/resume/<translation_id>', methods=['POST'])
     def resume_translation_job_endpoint(translation_id):
@@ -692,6 +726,39 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         except Exception:
             state_manager.release_execution(translation_id)
             raise
+
+    @bp.route('/api/translation/<translation_id>/accounting', methods=['GET'])
+    def download_accounting_report(translation_id):
+        """Download the durable content-accounting report of a finished PDF.
+
+        The report lives next to the translated output, outside the pruned
+        working cache. It is only served while its output still exists, so a
+        sidecar can never be presented as proof of a book the user has deleted.
+        """
+        config = {}
+        job = state_manager.get_translation(translation_id)
+        if job and isinstance(job.get('config'), dict):
+            config = job['config']
+        else:
+            row = state_manager.checkpoint_manager.get_job(translation_id)
+            if row and isinstance(row.get('config'), dict):
+                config = row['config']
+        report_path = _accounting_report_path(
+            output_dir, config.get('output_filename') if config else None)
+        if report_path is None:
+            return jsonify({
+                "error": "Accounting report not found",
+                "message": "No durable report is available for this task's "
+                           "translated output.",
+            }), 404
+        filename = config.get('output_filename') or report_path.name
+        download_name = f"{Path(filename).stem}.accounting.json"
+        return send_file(
+            str(report_path),
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=download_name,
+        )
 
     @bp.route('/api/checkpoint/<translation_id>', methods=['DELETE'])
     def delete_checkpoint_endpoint(translation_id):

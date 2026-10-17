@@ -34,6 +34,7 @@ from src.core.common.plain_text_checkpoint import (
     resume_plain_segments,
 )
 from src.core.common.plain_text_pipeline import translate_paragraphs_plain
+from src.core.epub.xhtml_translation_state import unfinished_chunk_indices
 from src.core.mineru.admission import RECOGNITION_BUDGET_SECONDS
 from src.core.mineru.errors import (
     MineruContinuationUnavailable,
@@ -44,6 +45,7 @@ from src.core.mineru.errors import (
 from src.core.mineru.recognition import RecognitionResult, recognize_pdf
 from src.core.mineru.recognition_state import TaskRecognitionStore
 from src.core.pdf.accounting import (
+    assess_pdf_completion,
     build_accounting,
     validate_pdf_output,
     write_accounting_sidecar,
@@ -222,6 +224,13 @@ async def translate_pdf_file(
     resume_segments, resume_translated = resume_plain_segments(
         resume_state, paragraph_count, log_callback
     )
+    resume_statuses = getattr(resume_state, 'chunk_statuses', None)
+    resume_stats = getattr(resume_state, 'stats', None)
+
+    # Capture the terminal per-segment statuses the pipeline persists, so this
+    # run can report how much of the delivered body is genuinely translated
+    # (a retried segment that used to be untranslated must stop counting).
+    latest_statuses: Dict[str, list] = {}
     checkpoint_hook = build_plain_checkpoint_hook(
         checkpoint_manager=checkpoint_manager,
         translation_id=translation_id,
@@ -236,6 +245,14 @@ async def translate_pdf_file(
         bilingual=bilingual,
         doc_identity=checkpoint_identity,
     )
+    if checkpoint_hook is not None:
+        persist_checkpoint = checkpoint_hook
+
+        def checkpoint_hook(*args, chunk_statuses=None, **kwargs):
+            if chunk_statuses is not None:
+                latest_statuses['statuses'] = list(chunk_statuses)
+            return persist_checkpoint(*args, chunk_statuses=chunk_statuses,
+                                      **kwargs)
 
     translated, stats, was_interrupted = await translate_paragraphs_plain(
         paragraphs=content.paragraphs_text,
@@ -252,6 +269,8 @@ async def translate_pdf_file(
         parallel_workers=parallel_workers,
         resume_segments=resume_segments,
         resume_translated=resume_translated,
+        resume_statuses=resume_statuses,
+        resume_stats=resume_stats,
         checkpoint_hook=checkpoint_hook,
     )
 
@@ -264,6 +283,11 @@ async def translate_pdf_file(
             'output_path': None,
             'interrupted': True,
         }
+
+    final_stats = _final_pdf_stats(
+        stats, latest_statuses.get('statuses'))
+    if stats_callback:
+        stats_callback(final_stats)
 
     # Build next to the destination, validate, then publish atomically: a
     # partially written or preview-stamped file must never become the task's
@@ -303,7 +327,7 @@ async def translate_pdf_file(
     accounting = build_accounting(
         recognition=outcome,
         content=content,
-        translation_stats=stats.to_dict(),
+        translation_stats=final_stats,
         output_stats=output_stats,
         output_filename=destination.name,
         source_language=source_language,
@@ -318,17 +342,50 @@ async def translate_pdf_file(
         log_callback("pdf_accounting_written",
                      f"🧾 Accounting report written: {sidecar.name}")
 
-    # The document is complete: drop the segment checkpoint so a later
-    # resume of the same job does not replay a stale state.
-    delete_plain_checkpoint(checkpoint_manager, translation_id, file_href, log_callback)
+    # Only a validated whole-book report is a terminal success. Assess the
+    # published pair here before dropping any recovery data: a body with
+    # untouched chunks, or an accounting report that cannot prove coverage,
+    # keeps the segmented checkpoint so a later retry is cheap. The job owner
+    # still makes the final 'completed'/'partial'/'error' classification.
+    body_complete = int(final_stats.get('unfinished_chunks') or 0) == 0
+    assessment = assess_pdf_completion(destination)
+    if assessment.complete:
+        delete_plain_checkpoint(
+            checkpoint_manager, translation_id, file_href, log_callback)
 
     return {
         'success': True,
-        'stats': stats.to_dict(),
+        'stats': final_stats,
         'output_path': str(destination),
         'recognition': _recognition_summary(outcome),
         'accounting': accounting,
+        'body_complete': body_complete,
+        'completion_assessed': assessment.complete,
     }
+
+
+def _final_pdf_stats(stats, statuses):
+    """Finish the job stats for the *delivered* body, not a historical tally.
+
+    ``failed_chunks``/``unfinished_chunks`` describe the output being published.
+    When the pipeline exposed its terminal per-segment statuses, they are the
+    authority: a segment retried successfully in this run is translated even
+    though the restored counters still remember an earlier fallback. Without a
+    checkpoint (CLI runs), the live counters are the only available evidence.
+    """
+    final = stats.to_dict()
+    if statuses is not None:
+        unfinished = len(unfinished_chunk_indices(list(statuses)))
+    else:
+        unfinished = int(final.get('failed_chunks') or 0) + max(
+            0, int(final.get('total_chunks') or 0)
+            - int(final.get('completed_chunks') or 0))
+    final['failed_chunks'] = unfinished
+    final['unfinished_chunks'] = unfinished
+    # For this format the fallback counter describes source text still in the
+    # delivered book; a healed retry must not keep claiming an old fallback.
+    final['fallback_used'] = unfinished
+    return final
 
 
 _PDF_CHECKPOINT_IDENTITY_KEYS = (

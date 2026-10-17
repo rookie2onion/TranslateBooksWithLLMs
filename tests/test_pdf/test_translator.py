@@ -61,9 +61,15 @@ class _Source:
         self.formats = tuple(content.paragraphs_format)
         self.images_by_paragraph = dict(content.images_by_paragraph)
         self.provenance = (
-            SimpleNamespace(kind="caption", output_index=1),
-            SimpleNamespace(kind="footnote", output_index=1),
+            SimpleNamespace(kind="caption", output_index=1, source_page=1),
+            SimpleNamespace(kind="footnote", output_index=1, source_page=2),
         )
+        self.page_map = (
+            SimpleNamespace(sample_index=0, source_page=1),
+            SimpleNamespace(sample_index=1, source_page=2),
+        )
+        self.exclusions = ()
+        self.findings = ()
         self.counts = {"paragraphs": len(content.paragraphs_text), "images": 1,
                        "blocks_seen": 4, "blocks_accounted": 4, "excluded": 0,
                        "findings": 0}
@@ -80,8 +86,15 @@ def _recognition(content=None, *, reused=False):
             sha256="a" * 64, size_bytes=4321, page_count=2,
             file_name="source.pdf"),
         source=_Source(content),
-        cache=SimpleNamespace(backend="hybrid", engine_version="2.5.4",
-                              fingerprints={"layout.json": "f" * 64}),
+        cache=SimpleNamespace(
+            backend="hybrid", engine_version="2.5.4",
+            fingerprints={"layout.json": "f" * 64},
+            blocks=(
+                SimpleNamespace(page_index=0, index=0),
+                SimpleNamespace(page_index=0, index=1),
+                SimpleNamespace(page_index=1, index=2),
+                SimpleNamespace(page_index=1, index=3),
+            )),
         batch_id="batch-abc123",
         result_zip_sha256="b" * 64,
         result_cache_sha256="c" * 64,
@@ -246,6 +259,120 @@ async def test_checkpoint_deleted_only_after_success(tmp_path):
             checkpoint_manager=manager, translation_id="job1")
     assert result["interrupted"] is True
     manager.delete_xhtml_partial_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_partial_body_keeps_the_checkpoint_for_a_retry(tmp_path):
+    """A published partial PDF is resumable: its state must not be dropped.
+
+    The final completion verdict is decided by the job owner; the PDF
+    translator may only delete the segmented checkpoint once the translated
+    body is actually complete.
+    """
+
+    async def _partial_pipeline(*args, paragraphs, **kwargs):
+        metrics = TranslationMetrics(total_chunks=1, processed_chunks=1,
+                                     failed_chunks=1)
+        return [f"T:{paragraph}" for paragraph in paragraphs], metrics, False
+
+    manager = Mock()
+    manager.load_xhtml_partial_state.return_value = None
+    manager.recognition_dir.return_value = tmp_path / "recognition"
+    output = tmp_path / "partial.pdf"
+
+    with patch(PIPELINE, AsyncMock(side_effect=_partial_pipeline)):
+        result, _ = await _translate(
+            tmp_path, output, checkpoint_manager=manager,
+            translation_id="job1")
+
+    assert result["success"] is True
+    assert result["stats"]["failed_chunks"] == 1
+    assert result["stats"]["unfinished_chunks"] == 1
+    assert result["accounting"]["translation"]["complete"] is False
+    manager.delete_xhtml_partial_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resume_replays_the_retry_statuses_and_counters_from_the_checkpoint(tmp_path):
+    from src.core.common.plain_text_checkpoint import paragraph_mapping_sha256
+
+    content = _content()
+    state = SimpleNamespace(
+        doc_metadata={
+            "plain_text_mode": True,
+            "paragraph_count": len(content.paragraphs_text),
+            "source_sha256": "a" * 64,
+            "result_cache_sha256": "c" * 64,
+            "paragraph_mapping_sha256": paragraph_mapping_sha256(
+                list(content.paragraphs_text)),
+        },
+        chunks=[
+            {"indices": [0, 1], "text": "Chapter One\nA body paragraph.",
+             "partial": False},
+        ],
+        translated_chunks=["Chapitre un\nUn paragraphe."],
+        chunk_statuses=["untranslated"],
+        stats={"total_chunks": 1, "processed_chunks": 1, "failed_chunks": 1},
+    )
+    manager = Mock()
+    manager.load_xhtml_partial_state.return_value = state
+    manager.recognition_dir.return_value = tmp_path / "recognition"
+
+    pipeline = _fake_pipeline()
+    with patch(PIPELINE, pipeline):
+        await _translate(
+            tmp_path, tmp_path / "resumed.pdf", checkpoint_manager=manager,
+            translation_id="job1")
+
+    kwargs = pipeline.await_args.kwargs
+    assert kwargs["resume_statuses"] == ["untranslated"]
+    assert kwargs["resume_stats"] == state.stats
+    assert kwargs["resume_translated"] == ["Chapitre un\nUn paragraphe."]
+
+
+@pytest.mark.asyncio
+async def test_unproven_coverage_keeps_the_checkpoint_for_the_owner_verdict(tmp_path):
+    """A complete body with unaccounted blocks is not a validated success."""
+
+    recognition = _recognition()
+    recognition.source.counts["blocks_accounted"] = 3
+    recognition.source.counts["blocks_unaccounted"] = 1
+    recognition.source.counts["excluded"] = 0
+    manager = Mock()
+    manager.load_xhtml_partial_state.return_value = None
+    manager.recognition_dir.return_value = tmp_path / "recognition"
+
+    with patch(PIPELINE, _fake_pipeline()):
+        result, _ = await _translate(
+            tmp_path, tmp_path / "unproven.pdf",
+            recognition=recognition, checkpoint_manager=manager,
+            translation_id="job1")
+
+    assert result["success"] is True
+    assert result["completion_assessed"] is False
+    assert result["accounting"]["coverage"]["complete"] is False
+    manager.delete_xhtml_partial_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rebuild_does_not_destroy_an_already_published_book(tmp_path):
+    output = tmp_path / "book.pdf"
+
+    with patch(PIPELINE, _fake_pipeline()):
+        first, _ = await _translate(tmp_path, output)
+    assert first["success"] is True
+    published = output.read_bytes()
+    published_report = accounting_path_for(output).read_bytes()
+
+    with patch(PIPELINE, _fake_pipeline()), \
+            patch("src.core.pdf.translator.build_pdf",
+                  side_effect=RuntimeError("rebuild failed")):
+        with pytest.raises(RuntimeError):
+            await _translate(tmp_path, output)
+
+    assert output.read_bytes() == published
+    assert accounting_path_for(output).read_bytes() == published_report
+    assert read_accounting_summary(output)["body_complete"] is True
 
 
 @pytest.mark.asyncio

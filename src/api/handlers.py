@@ -18,8 +18,8 @@ from src.core.adapters import refine_file, translate_file
 from src.core.llm import OpenRouterProvider
 from src.core.llm.exceptions import RateLimitError
 from src.core.llm_client import create_llm_client
-from src.core.mineru.errors import MineruTimeout
-from src.core.pdf.accounting import read_accounting_summary
+from src.core.mineru.errors import MineruCompletionInvalid, MineruTimeout
+from src.core.pdf.accounting import assess_pdf_completion, read_accounting_summary
 from src.core.progress import snapshot_from_legacy_stats
 from src.tts.tts_config import TTSConfig
 from src.utils.custom_instructions import is_safe_filename, load_custom_instructions
@@ -945,6 +945,17 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         if config.get('llm_api_endpoint'):
             final_status_payload['llm_api_endpoint'] = config['llm_api_endpoint']
 
+        # Attach the final stats and the durable accounting now, before any
+        # terminal status is published. A client that observes the terminal
+        # state must already be able to read the same completion payload.
+        final_status_payload['stats'] = state_manager.get_translation_field(
+            translation_id, 'stats') or {}
+        if os.path.exists(output_filepath_on_server):
+            accounting_summary = read_accounting_summary(output_filepath_on_server)
+            if accounting_summary:
+                final_status_payload['accounting'] = accounting_summary
+        payload_emitted = False
+
         if state_manager.get_translation_field(translation_id, 'interrupted'):
             state_manager.set_translation_field(translation_id, 'status', 'interrupted')
             # A cooperative stop can land during recognition (before any
@@ -1022,7 +1033,40 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             verdict = classify_completion(stats, output_filepath_on_server)
             stats_summary = _format_stats_summary(config, stats, verdict)
 
-            if verdict.status == 'error':
+            # A structurally valid PDF/report is not automatically a whole
+            # book. The durable accounting must prove exact source-page
+            # coverage, complete block accounting and a complete translated
+            # body before this job may become 'completed'. Existing completion
+            # classification stays authoritative for partial/error outcomes;
+            # this gate can only turn a would-be success into a non-success.
+            completion_problem = None
+            if verdict.status == 'completed' and config.get('file_type') == 'pdf':
+                completion_problem = assess_pdf_completion(
+                    output_filepath_on_server)
+
+            if completion_problem is not None and not completion_problem.complete:
+                # Keep the published output/report (they are valid artifacts)
+                # and keep the working data: this job is retryable, not a book.
+                state_manager.set_translation_field(translation_id, 'status', 'error')
+                state_manager.set_translation_field(
+                    translation_id, 'error', completion_problem.message)
+                state_manager.set_translation_field(
+                    translation_id, 'error_code', MineruCompletionInvalid.code)
+                final_status_payload['status'] = 'error'
+                final_status_payload['error'] = completion_problem.message
+                final_status_payload['error_code'] = MineruCompletionInvalid.code
+                _log_message_callback(
+                    "summary_completion_invalid",
+                    f"❌ The translated PDF was kept, but whole-book completion "
+                    f"could not be proven ({completion_problem.reason}): "
+                    f"{completion_problem.message}")
+                checkpoint_manager.mark_error(translation_id)
+                await asyncio.to_thread(
+                    notify, EVENT_FAILURE,
+                    _notification_context(
+                        config, translation_id, elapsed_time,
+                        error=completion_problem.message))
+            elif verdict.status == 'error':
                 # The translation loop ran to the end but produced no usable
                 # output file. Report it honestly instead of claiming success.
                 state_manager.set_translation_field(translation_id, 'status', 'error')
@@ -1051,11 +1095,8 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 checkpoint_manager.mark_partial(translation_id)
                 # No pruning — the checkpoint is deliberately kept for retry.
             else:
-                state_manager.set_translation_field(translation_id, 'status', 'completed')
                 _log_message_callback("summary_completed", f"✅ Translation completed in {elapsed_time:.2f}s{stats_summary}")
                 final_status_payload['status'] = 'completed'
-                await asyncio.to_thread(notify, EVENT_SUCCESS,
-                    _notification_context(config, translation_id, elapsed_time))
 
                 # The job is marked 'completed' in the database and the row is
                 # KEPT: it does NOT appear in get_resumable_jobs (a finished
@@ -1066,14 +1107,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 # which already includes 'completed'.
                 #
                 # What is dropped is only the bulky resume data — the checkpoint
-                # chunks and uploads/<job>/ — via prune_job_data. That pruning is
-                # skipped when the book still holds chunks that token alignment
-                # translated with approximate tag positions. Those chunks are
-                # not a defect the verdict cares about (the job is and stays
-                # 'completed', design decision D3), but the completion card
-                # offers an explicit "retry them with another model" action, and
-                # that action needs the checkpoint plus the per-file XHTML
-                # states plus the preserved input file.
+                # chunks and uploads/<job>/ (including task-owned recognition
+                # files) — via prune_job_data. That pruning is skipped when the
+                # book still holds chunks that token alignment translated with
+                # approximate tag positions. Those chunks are not a defect the
+                # verdict cares about (the job is and stays 'completed', design
+                # decision D3), but the completion card offers an explicit
+                # "retry them with another model" action, and that action needs
+                # the checkpoint plus the per-file XHTML states plus the
+                # preserved input file.
                 if _degraded_chunk_count(stats) > 0:
                     checkpoint_manager.mark_completed(translation_id)
                     _log_message_callback("checkpoint_kept_degraded",
@@ -1083,6 +1125,20 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 else:
                     checkpoint_manager.mark_completed(translation_id)
                     checkpoint_manager.prune_job_data(translation_id)
+
+                # Publish the completion payload first, then make the terminal
+                # status observable. A status poller can therefore never see a
+                # completed job whose accounting payload has not been emitted
+                # yet, and the completion card can render the durable counters
+                # immediately. Both calls are synchronous: no await separates
+                # them.
+                emit_update(socketio, translation_id, final_status_payload,
+                            state_manager)
+                state_manager.set_translation_field(
+                    translation_id, 'status', 'completed')
+                payload_emitted = True
+                await asyncio.to_thread(notify, EVENT_SUCCESS,
+                    _notification_context(config, translation_id, elapsed_time))
 
             # Clean up uploaded file if it exists and is in the uploads directory
             # On completion (or a partial run) we can safely delete the original
@@ -1139,18 +1195,12 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 _log_message_callback
             )
 
-        # Attach final stats so the completion card can render its summary
-        # (cost, tokens, failed chunks…). emit_update no longer auto-attaches.
-        final_status_payload['stats'] = state_manager.get_translation_field(translation_id, 'stats') or {}
-        # The durable accounting is the only place that separates deliberately
-        # source-preserved content from failed translation chunks; carry it on
-        # the completion payload so the Web summary can say so without parsing
-        # the sidecar or inventing a second counter.
-        if os.path.exists(output_filepath_on_server):
-            accounting_summary = read_accounting_summary(output_filepath_on_server)
-            if accounting_summary:
-                final_status_payload['accounting'] = accounting_summary
-        emit_update(socketio, translation_id, final_status_payload, state_manager)
+        # The final stats/accounting are attached above, before any terminal
+        # status; only statuses that did not already publish their payload emit
+        # it here.
+        if not payload_emitted:
+            emit_update(socketio, translation_id, final_status_payload,
+                        state_manager)
 
         # Trigger file list refresh in the frontend if a file was saved
         if os.path.exists(output_filepath_on_server) and final_status_payload['status'] in ['completed', 'interrupted', 'partial']:
@@ -1318,6 +1368,10 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             state_manager.set_translation_field(translation_id, 'error', critical_error_msg)
             if error_code:
                 state_manager.set_translation_field(translation_id, 'error_code', error_code)
+            # The job's recovery data is deliberately retained: mark the row
+            # resumable now instead of leaving it 'running' until a restart
+            # sweeps it (the task-owned recognition files are the way back).
+            checkpoint_manager.mark_error(translation_id)
 
             error_payload = {
                 'error': critical_error_msg,
@@ -1455,4 +1509,12 @@ def start_translation_job(translation_id, config, state_manager, output_dir, soc
         args=(translation_id, config, state_manager, output_dir, socketio)
     )
     thread.daemon = True
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        # The job was created and holds its execution claim; a thread that
+        # never ran must not leave that claim behind until a process restart.
+        release = getattr(state_manager, 'release_execution', None)
+        if release is not None:
+            release(translation_id)
+        raise

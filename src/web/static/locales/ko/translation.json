@@ -109,6 +109,10 @@
   "completion_card_dismiss": "닫기",
   "completion_failed_chunks": "{{count}}개 실패",
   "completion_source_preserved": "{{count}}개의 원본 보존 이미지(번역되지 않음)",
+  "completion_pdf_coverage": "전체 책 범위: 원본 {{pages}}/{{expected}}페이지, {{accounted}}/{{recognized}}개 블록 계산됨",
+  "completion_pdf_empty_pages": "빈 인식 페이지 {{count}}개 표시됨",
+  "completion_pdf_limitations": "회계 보고서는 인식된 텍스트의 페이지 및 블록 범위와 번역 본문 완료를 입증합니다. 인식 정확성을 입증하지 않으며, 원본 보존 이미지와 이미지 픽셀 안의 텍스트를 번역하지 않습니다.",
+  "completion_download_report": "회계 보고서 다운로드",
   "completion_fallback_chunks": "서식 폴백 {{count}}건",
   "completion_placeholder_errors": "서식 미흡 {{count}}건",
   "completion_paragraph_realigned": "단락 재정렬 {{count}}건",
@@ -216,6 +220,7 @@
   "history_chunks": "{{completed}} / {{total}} 청크",
   "history_output_missing": "출력 파일을 더 이상 사용할 수 없습니다",
   "history_type_line": "유형: {{type}}",
+  "history_download_report": "회계 보고서",
 
   "file_list_cleared": "파일 목록이 지워졌습니다",
   "form_reset_log": "양식 및 파일 목록이 초기화되었습니다.",
@@ -317,5 +322,6 @@
   "mineru_error_provider_rejected": "MinerU가 인식 요청을 거부했습니다. 구성된 토큰과 원본 문서를 확인하세요.",
   "mineru_error_result_invalid": "인식 결과가 이 PDF와 일치하지 않거나 불완전하여 책이 생성되지 않았습니다.",
   "mineru_error_output_invalid": "번역된 PDF가 검증을 통과하지 못해 게시되지 않았습니다.",
+  "mineru_error_completion_invalid": "번역된 PDF는 보존되었지만 콘텐츠 회계가 전체 책 범위를 입증하지 못해 작업이 완료로 보고되지 않았습니다.",
   "mineru_error_unsupported_content": "이 PDF에는 앱이 아직 안정적으로 보존할 수 없는 인식된 콘텐츠(예: 인라인 수식)가 있어 책이 생성되지 않았습니다. 원본 PDF는 변경되지 않았습니다."
 }

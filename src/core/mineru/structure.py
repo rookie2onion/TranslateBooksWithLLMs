@@ -62,6 +62,7 @@ class ImageAsset:
     height_pt: float
     sha256: str
     kind: str = "image"
+    block_index: int = -1
 
     @property
     def label(self) -> str:
@@ -88,6 +89,7 @@ class Provenance:
     anchor_index: Optional[int] = None
     image_path: Optional[str] = None
     image_sha256: Optional[str] = None
+    block_index: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -226,6 +228,7 @@ def adapt(cache: MineruCache) -> SourceContent:
             bbox=block.bbox if block else None,
             text_sha256=_sha256_text(text),
             output_index=index,
+            block_index=block.index if block else None,
         ))
 
     def exclude(block: CachedBlock, kind: str, reason: str) -> None:
@@ -292,7 +295,7 @@ def adapt(cache: MineruCache) -> SourceContent:
                 source_page=page.source_page, bbox=block.bbox,
                 text_sha256=_sha256_text(""), anchor_index=anchor,
                 image_path=block.image_path.relative_to(cache.root).as_posix(),
-                image_sha256=asset.sha256))
+                image_sha256=asset.sha256, block_index=block.index))
             caption = " ".join(part.strip() for part in block.image_caption if part.strip())
             if caption:
                 emit(caption, "caption", "normal", ParagraphFormat(italic=True),
@@ -367,11 +370,15 @@ def adapt(cache: MineruCache) -> SourceContent:
             sample_page=block.page_index, block_index=block.index, severity="review"))
 
     all_assets = [asset for assets in images.values() for asset in assets]
+    block_pages = {block.page_index for block in cache.blocks}
     counts = {
         "blocks_seen": len(cache.blocks),
         "blocks_accounted": len(accounted),
         "blocks_unaccounted": len(unaccounted),
         "paragraphs": len(paragraphs),
+        "pages_recognized": len(cache.pages),
+        "empty_pages": sum(1 for page in cache.pages
+                           if page.sample_index not in block_pages),
         # Ordinary figures only: source-preserved table/formula images are
         # counted on their own so the accounting never conflates them.
         "images": sum(1 for asset in all_assets if asset.kind == "image"),
@@ -504,6 +511,7 @@ def _image_asset(block: CachedBlock, page: PageInfo, root: Path) -> ImageAsset:
         width_pt=x1 - x0,
         height_pt=y1 - y0,
         sha256=hashlib.sha256(data).hexdigest(),
+        block_index=block.index,
     )
 
 
@@ -523,6 +531,7 @@ def _preserved_asset(block: CachedBlock, page: PageInfo, kind: str) -> ImageAsse
         height_pt=y1 - y0,
         sha256=hashlib.sha256(data).hexdigest(),
         kind=kind,
+        block_index=block.index,
     )
 
 
@@ -540,6 +549,7 @@ def _preserved_provenance(block: CachedBlock, page: PageInfo, *, kind: str,
         anchor_index=anchor,
         image_path=block.image_path.relative_to(root).as_posix(),
         image_sha256=asset.sha256,
+        block_index=block.index,
     )
 
 

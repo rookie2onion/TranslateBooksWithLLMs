@@ -34,6 +34,7 @@ const KNOWN_CODES = new Set([
     'mineru_result_invalid',
     'mineru_unsupported_content',
     'mineru_output_invalid',
+    'mineru_completion_invalid',
 ]);
 
 const DEFAULT_MAX_PAGES = 200;

@@ -109,6 +109,10 @@
   "completion_card_dismiss": "Verwerfen",
   "completion_failed_chunks": "{{count}} fehlgeschlagen",
   "completion_source_preserved": "{{count}} quellenerhaltene(s) Bild(er), unübersetzt",
+  "completion_pdf_coverage": "Ganzbuchabdeckung: {{pages}}/{{expected}} Quellseiten, {{accounted}}/{{recognized}} Blöcke abgerechnet",
+  "completion_pdf_empty_pages": "{{count}} leere erkannte Seite(n) abgebildet",
+  "completion_pdf_limitations": "Der Abrechnungsbericht belegt die Seiten- und Blockabdeckung sowie den Abschluss des übersetzten Fließtextes für erkannten Text. Er belegt nicht die Erkennungsgenauigkeit und übersetzt keinen Text in quellenerhaltenen Bildern und Bildpixeln.",
+  "completion_download_report": "Abrechnungsbericht herunterladen",
   "completion_fallback_chunks": "{{count}} Formatierungs-Fallback(s)",
   "completion_placeholder_errors": "{{count}} Formatierungsmangel",
   "completion_paragraph_realigned": "{{count}} Absatz-Neuausrichtung(en)",
@@ -216,6 +220,7 @@
   "history_chunks": "{{completed}} / {{total}} Segmente",
   "history_output_missing": "Ausgabedatei nicht mehr verfügbar",
   "history_type_line": "Typ: {{type}}",
+  "history_download_report": "Abrechnungsbericht",
 
   "file_list_cleared": "Dateiliste geleert",
   "form_reset_log": "Formular und Dateiliste zurückgesetzt.",
@@ -317,5 +322,6 @@
   "mineru_error_provider_rejected": "MinerU hat die Erkennungsanfrage abgelehnt. Prüfe das konfigurierte Token und das Quelldokument.",
   "mineru_error_result_invalid": "Das Erkennungsergebnis passt nicht zu dieser PDF oder ist unvollständig, daher wurde kein Buch erzeugt.",
   "mineru_error_output_invalid": "Die übersetzte PDF hat die Validierung nicht bestanden und wurde daher nicht veröffentlicht.",
+  "mineru_error_completion_invalid": "Die übersetzte PDF wurde beibehalten, aber ihre Inhaltsabrechnung belegte keine Ganzbuchabdeckung; die Aufgabe wurde daher nicht als abgeschlossen gemeldet.",
   "mineru_error_unsupported_content": "Diese PDF enthält erkannte Inhalte, die die Anwendung noch nicht zuverlässig erhalten kann (zum Beispiel eine Inline-Formel). Es wurde daher kein Buch erzeugt. Die Quelldatei bleibt unverändert."
 }

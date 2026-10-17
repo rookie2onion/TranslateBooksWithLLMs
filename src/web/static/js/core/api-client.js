@@ -211,6 +211,20 @@ export const ApiClient = {
     },
 
     /**
+     * Download the durable content-accounting report of a finished task.
+     *
+     * The URL is a top-level navigation target (like a file download), so it
+     * carries the per-session token as a query parameter.
+     * @param {string} translationId - Translation task id
+     * @returns {string} Report download URL
+     */
+    getAccountingDownloadUrl(translationId) {
+        return withToken(
+            `${API_BASE_URL}/api/translation/${encodeURIComponent(translationId)}/accounting`
+        );
+    },
+
+    /**
      * Delete a single file
      * @param {string} filename - Filename to delete
      * @returns {Promise<Object>} Delete result
