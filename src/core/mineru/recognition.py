@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from src.utils.hashing import sha256_file
+
 from .admission import (
     MAX_BYTES,
     MAX_PAGES,
@@ -577,7 +579,7 @@ def _poll_download_validate(
 
     _notify(progress, "validating")
     save(phase="validating")
-    if _sha256_file(admitted.path) != admitted.sha256:
+    if sha256_file(admitted.path) != admitted.sha256:
         message = ("The source PDF changed during recognition, so the "
                    "returned result cannot be accepted.")
         save(error_code="mineru_result_invalid", error_message=message)
@@ -683,13 +685,6 @@ def _result(admitted: AdmittedSource, source: SourceContent, online: OnlineResul
 
 def _data_id(admitted: AdmittedSource) -> str:
     return f"{_DATA_ID_PREFIX}{admitted.sha256[:20]}"
-
-
-def _sha256_file(path: Path) -> str:
-    import hashlib
-
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _notify(callback: Optional[Callable[[str], None]], phase: str) -> None:

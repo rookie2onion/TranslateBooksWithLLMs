@@ -7,12 +7,13 @@ fingerprinted so later stages can prove the cache was not modified.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, Mapping, Tuple
+
+from src.utils.hashing import sha256_file
 
 KNOWN_BLOCK_TYPES = frozenset(
     {"title", "paragraph", "image", "table", "equation_interline",
@@ -447,11 +448,6 @@ def _read_json(path: Path, label: str) -> Any:
         raise MineruCacheError(f"{label} is not valid UTF-8 JSON.") from exc
 
 
-def _sha256_file(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
 def _key(path: Path, root: Path) -> str:
     """Stable cache-relative fingerprint key (the run dir may wrap a result/ dir)."""
     return path.relative_to(root).as_posix()
@@ -460,4 +456,4 @@ def _key(path: Path, root: Path) -> str:
 def _fingerprint(path: Path, root: Path, fingerprints: Dict[str, str]) -> None:
     key = _key(path, root)
     if key not in fingerprints:
-        fingerprints[key] = _sha256_file(path)
+        fingerprints[key] = sha256_file(path)

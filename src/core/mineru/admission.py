@@ -12,10 +12,11 @@ The effective Web byte ceiling stays the existing 100 MiB upload limit; the
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+from src.utils.hashing import sha256_file
 
 from .errors import (
     MineruAuthorizationRequired,
@@ -127,7 +128,7 @@ def describe_pdf(file_path: Path) -> AdmittedSource:
         file_name=path.name,
         size_bytes=size_bytes,
         page_count=_read_page_count(path),
-        sha256=_sha256_file(path),
+        sha256=sha256_file(path),
     )
 
 
@@ -159,8 +160,3 @@ def _read_page_count(path: Path) -> int:
     if page_count < 1:
         raise MineruPdfUnreadable(f"{path.name} has no pages.")
     return page_count
-
-
-def _sha256_file(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()

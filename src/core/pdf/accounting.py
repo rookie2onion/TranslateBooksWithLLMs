@@ -30,6 +30,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from src.core.common.plain_text_checkpoint import paragraph_mapping_sha256
 from src.core.mineru.errors import MineruOutputInvalid
+from src.utils.hashing import sha256_file
 
 from .content import PdfPlainContent
 
@@ -137,7 +138,7 @@ def validate_pdf_output(
         text_chars=len(text),
         image_count=image_count,
         bytes=size,
-        sha256=_sha256_file(path),
+        sha256=sha256_file(path),
     )
 
 
@@ -671,11 +672,6 @@ def _as_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
-
-
-def _sha256_file(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _now() -> str:

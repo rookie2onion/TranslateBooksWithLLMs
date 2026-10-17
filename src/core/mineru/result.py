@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.utils.hashing import sha256_file
 from src.utils.security import (
     SecurityError,
     find_unsafe_archive_member,
@@ -88,7 +89,7 @@ def build_online_result(
     return OnlineResult(
         cache=cache,
         root=result_root,
-        zip_sha256=_sha256_file(archive_path),
+        zip_sha256=sha256_file(archive_path),
         cache_sha256=cache_fingerprint(cache),
         page_count=len(cache.pages),
     )
@@ -262,8 +263,3 @@ def _result_error(exc: MineruCacheError, root: Path) -> MineruResultInvalid:
         return MineruUnsupportedContent(
             f"The recognition result contains unsupported content: {text}")
     return MineruResultInvalid(f"The recognition result did not validate: {text}")
-
-
-def _sha256_file(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()

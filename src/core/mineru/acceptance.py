@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
+from src.utils.hashing import sha256_file
+
 from .cache import KNOWN_BLOCK_TYPES, MineruCache
 from .epub_preview import image_resource_name
 from .export import MineruExportError, ensure_output_outside_cache, write_json_atomic
@@ -202,7 +204,7 @@ def _check_cache_unmodified(cache: MineruCache, pdf: Mapping[str, Any],
         path = cache.root / name
         if not path.is_file():
             problems.append(f"{name} is missing")
-        elif _sha256(path) != digest:
+        elif sha256_file(path) != digest:
             problems.append(f"{name} changed")
     return Check("cache_unmodified", "Cache files still match the recorded fingerprints",
                  "fail" if problems else "pass",
@@ -342,7 +344,7 @@ def _check_image_integrity(cache: MineruCache, pdf: Mapping[str, Any],
         path = cache.root / str(image.get("image_path"))
         if not path.is_file():
             problems.append(f"{image.get('image_path')} missing from the cache")
-        elif _sha256(path) != image.get("image_sha256"):
+        elif sha256_file(path) != image.get("image_sha256"):
             problems.append(f"{image.get('image_path')} hash differs")
     if pdf.get("pdf", {}).get("image_count") != len(pdf.get("images", [])):
         problems.append("PDF image count differs from provenance")
@@ -541,7 +543,7 @@ def _artifact_hashes(root: Path, exclude: Iterable[str]) -> Dict[str, str]:
         relative = path.relative_to(root).as_posix()
         if relative in excluded:
             continue
-        files[relative] = _sha256(path)
+        files[relative] = sha256_file(path)
     return files
 
 
@@ -550,11 +552,6 @@ def _copy(source: Path, destination: Path) -> None:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
-
-
-def _sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _report(cache: MineruCache, reconstruction: Reconstruction, checks: Sequence[Check],
