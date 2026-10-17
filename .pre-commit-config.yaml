@@ -24,8 +24,8 @@ repos:
   - repo: local
     hooks:
       - id: pytest
-        name: pytest (unit tests)
-        entry: pytest tests/unit -v --tb=short
+        name: pytest (offline unit gate)
+        entry: python scripts/check.py --unit-only
         language: system
         pass_filenames: false
         always_run: true
