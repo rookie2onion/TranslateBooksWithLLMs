@@ -582,7 +582,7 @@ def _poll_download_validate(
     if sha256_file(admitted.path) != admitted.sha256:
         message = ("The source PDF changed during recognition, so the "
                    "returned result cannot be accepted.")
-        save(error_code="mineru_result_invalid", error_message=message)
+        save(error_code=MineruResultInvalid.code, error_message=message)
         raise MineruResultInvalid(message)
     try:
         return build_online_result(
@@ -612,7 +612,7 @@ def _poll_until_done(
             message = ("Local recognition was stopped. The remote MinerU task "
                        "may continue; this is not remote cancellation.")
             save(phase="interrupted_local",
-                 error_code="mineru_recognition_interrupted",
+                 error_code=MineruInterrupted.code,
                  error_message=message)
             raise MineruInterrupted(message)
         if clock() >= deadline:
@@ -658,7 +658,7 @@ def _raise_timeout(save: Callable[..., RecognitionState]) -> None:
     message = ("The local five-minute recognition budget elapsed. The remote "
                "MinerU task may continue, but this attempt did not complete and "
                "will not be reported as successful.")
-    save(phase="timed_out", error_code="mineru_recognition_timeout",
+    save(phase="timed_out", error_code=MineruTimeout.code,
          error_message=message)
     raise MineruTimeout(message)
 

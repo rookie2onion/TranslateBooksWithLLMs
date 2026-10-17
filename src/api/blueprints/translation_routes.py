@@ -24,7 +24,15 @@ from src.config import (
     REQUEST_TIMEOUT,
 )
 from src.core.mineru.admission import admit_pdf_source
-from src.core.mineru.errors import MineruError
+from src.core.mineru.errors import (
+    MineruAuthorizationRequired,
+    MineruByteLimit,
+    MineruError,
+    MineruPageLimit,
+    MineruPdfEncrypted,
+    MineruPdfUnreadable,
+    MineruTokenMissing,
+)
 from src.core.pdf.accounting import accounting_path_for, read_accounting_summary
 from src.tts.tts_config import TTSConfig
 
@@ -35,12 +43,12 @@ logger = logging.getLogger('translation_routes')
 # code. The Web interface resolves the code into a localized message; the label
 # is a developer/API fallback, never a credential or a provider URL.
 _MINERU_ERROR_LABELS = {
-    "mineru_authorization_required": "MinerU upload authorization required",
-    "mineru_token_missing": "MinerU is not configured",
-    "mineru_pdf_unreadable": "PDF cannot be read",
-    "mineru_pdf_encrypted": "PDF is password-protected",
-    "mineru_page_limit": "PDF exceeds the recognition page limit",
-    "mineru_byte_limit": "PDF exceeds the recognition size limit",
+    MineruAuthorizationRequired.code: "MinerU upload authorization required",
+    MineruTokenMissing.code: "MinerU is not configured",
+    MineruPdfUnreadable.code: "PDF cannot be read",
+    MineruPdfEncrypted.code: "PDF is password-protected",
+    MineruPageLimit.code: "PDF exceeds the recognition page limit",
+    MineruByteLimit.code: "PDF exceeds the recognition size limit",
 }
 
 
@@ -506,7 +514,7 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             if data.get('file_type') == 'pdf':
                 return jsonify({
                     "error": "PDF translation requires an uploaded PDF file",
-                    "code": "mineru_pdf_unreadable",
+                    "code": MineruPdfUnreadable.code,
                     "message": ("A PDF cannot be translated from inline text. "
                                 "Upload the PDF first."),
                 }), 400
