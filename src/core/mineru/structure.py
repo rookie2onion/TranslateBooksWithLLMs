@@ -116,6 +116,15 @@ class SourceContent:
     counts: Mapping[str, int]
     review_required: bool
 
+    def to_plain_content(self) -> PdfPlainContent:
+        """Convert to the shared PDF content model without preview decoration.
+
+        The title is the recognised title and the author is deliberately empty:
+        the preview convenience inference is not promoted to bibliographic
+        metadata.
+        """
+        return _plain_content(self, title=self.title, author="")
+
 
 @dataclass(frozen=True)
 class Reconstruction:
@@ -150,19 +159,24 @@ class Reconstruction:
         return "Untranslated MinerU sample preview"
 
     def to_plain_content(self) -> PdfPlainContent:
-        """Convert to the existing PDF content model."""
-        images = {anchor: [asset.to_pdf_image() for asset in assets]
-                  for anchor, assets in self.images_by_paragraph.items()}
-        return PdfPlainContent(
-            paragraphs_text=list(self.paragraphs),
-            paragraphs_style=list(self.styles),
-            images_by_paragraph=images,
-            page_size=self.page_size,
-            title=self.preview_title,
-            author=self.author,
-            page_count=len(self.page_map),
-            paragraphs_format=list(self.formats),
-        )
+        """Convert the decorated preview to the existing PDF content model."""
+        return _plain_content(self, title=self.preview_title, author=self.author)
+
+
+def _plain_content(document: SourceContent | Reconstruction, *, title: str,
+                   author: str) -> PdfPlainContent:
+    images = {anchor: [asset.to_pdf_image() for asset in assets]
+              for anchor, assets in document.images_by_paragraph.items()}
+    return PdfPlainContent(
+        paragraphs_text=list(document.paragraphs),
+        paragraphs_style=list(document.styles),
+        images_by_paragraph=images,
+        page_size=document.page_size,
+        title=title,
+        author=author,
+        page_count=len(document.page_map),
+        paragraphs_format=list(document.formats),
+    )
 
 
 def adapt(cache: MineruCache) -> SourceContent:
