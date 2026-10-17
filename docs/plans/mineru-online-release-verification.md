@@ -1,17 +1,19 @@
 # MinerU Online PDF Translation: Offline Release Verification (Ticket #24)
 
-Status: **offline verification complete on integration tip `271b2cc`; release
-acceptance is not complete.** Live recognition/translation, the 198-page
-reference-book run, browser smoke, and human visual acceptance remain
-**PENDING**. Issue
+Status: **offline verification complete on integration tip `271b2cc` (branch tip
+now `399ec19`), and one bounded live sample passed on 2026-10-17. Release
+acceptance is not complete.** The 198-page reference-book run, a live
+five-minute pause plus continuation, browser smoke, and human visual acceptance
+remain **PENDING**. Issue
 [#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) must stay
 open. This report does not claim release completion, recognition accuracy, or
 translation quality.
 
 ## Scope and limits
 
-- Verification was offline only. No MinerU call, LLM call, upload, or paid
-  request was made.
+- Verification below was offline only. A separate authorized live sample is
+  recorded in its own section; no MinerU call, LLM call, upload, or paid request
+  was made by the offline suites.
 - No provider credential, token, signed URL, or private book content was read,
   printed, or committed. The only token used by the tests is the inert fixture
   value `test-mineru-token`.
@@ -266,14 +268,49 @@ gate:
   still ends a token-forwarding assertion with `or True`; it is not a
   browser-visible credential surface and is outside this ticket's fix scope.
 
+## Live sample acceptance (authorized)
+
+The operator authorized one bounded live sample on 2026-10-17: the five-page
+sample of the reference book (source pages 1, 19, 20, 21 and 22), using MinerU
+online recognition and the configured DeepSeek provider (`deepseek-v4-pro`) for
+translation. No other live call was made.
+
+**Result: PASS for the exercised path.**
+
+- The job was created through the real Web API (`/api/upload` then
+  `/api/translate` with per-task PDF consent), polled through
+  `/api/translation/<id>`, and the finished PDF was downloaded through
+  `/api/files/<name>`.
+- Recognition: 5/5 pages, 65/65 recognised blocks accounted for, 14 justified
+  exclusions, 10 image instances, `coverage.complete: true`.
+- Translation: 17/17 chunks, 0 failed, 88.1 s end to end (recognition plus 17
+  translation calls). Output: 8-page reflowed PDF, 5,579 characters, 4,618 CJK
+  characters, 10 images.
+- Output metadata: title `STADTPLANUNG`, empty author, no preview notice and no
+  preview suffix. The accounting sidecar records `whole_book_coverage: true`,
+  `recognition_accuracy_proven: false`, `every_visible_word_translated: false`.
+- Private evidence stayed under Git-ignored `data/live-acceptance/` (PDF, page
+  renders, summaries); only this redacted summary is published.
+
+Environment notes:
+
+- The local VPN runs fake-IP DNS and returned an unreachable `198.18.x` address
+  for the MinerU result CDN. The live server was started with a process-local DNS
+  override (DoH to 1.1.1.1 for that host only); no application code or security
+  behavior changed.
+- Earlier attempts failed with `[Errno 22]` because several orphaned server
+  processes from killed background jobs were racing on the same port. After
+  killing them and running one server, the run completed.
+
+Not observed live: a pause at the five-minute local budget and its continuation
+(the sample finished in 88 s). The saved-task continuation after a failed result
+download is recorded in the private evidence, but it is not the 5-minute-pause
+scenario.
+
 ## What remains for #24 to stay open
 
-- **Live authorization:** explicit approval identifying the document/page scope
-  and the recognition and translation services. A previous probe, the parent
-  spec, this ticket, or this report does not authorize a live call.
-- **Bounded live sample:** run and record a small authorized sample, including a
-  pause at the five-minute local budget and safe continuation of the same remote
-  task without extending the budget or resubmitting.
+- **Live five-minute pause and continuation:** the bounded sample finished in
+  88 s, so a budget pause and its continuation were not observed live.
 - **198-page reference book:** separate/confirmed authorization, then the
   whole-book run. Verify expected source-page coverage, block accounting,
   source-preserved identification, image/caption/note order, metadata, artifact
