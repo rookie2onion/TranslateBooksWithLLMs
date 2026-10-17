@@ -111,6 +111,39 @@ def _sanitize(text: Any) -> str:
     return cleaned[:_ERROR_DETAIL_LIMIT]
 
 
+class _DeadlineBoundedStream:
+    """File-like upload body that aborts once the caller's deadline expires.
+
+    ``requests`` streams a file object in chunks while sending the body, and a
+    per-read socket timeout does not bound the total time a 50 MB upload may
+    take. Re-checking the shared deadline around every read keeps the whole
+    operation inside the remaining recognition budget.
+    """
+
+    def __init__(self, stream: Any, clock: Callable[[], float],
+                 deadline: float) -> None:
+        self._stream = stream
+        self._clock = clock
+        self._deadline = deadline
+
+    def read(self, size: int = -1) -> Any:
+        self._check()
+        chunk = self._stream.read(size)
+        self._check()
+        return chunk
+
+    def _check(self) -> None:
+        if self._clock() >= self._deadline:
+            raise MineruTimeout(
+                "The local recognition budget elapsed during the PDF upload; "
+                "the upload was aborted before it could complete.")
+
+    def __getattr__(self, name: str) -> Any:
+        # requests inspects ``fileno``/``tell`` to size the body and derive the
+        # Content-Length; delegating keeps the upload a plain fixed-length PUT.
+        return getattr(self._stream, name)
+
+
 class MineruClient:
     """Client for one MinerU account, one operation at a time."""
 
@@ -194,14 +227,26 @@ class MineruClient:
 
     def _storage_upload(self, url: str, stream: Any, deadline: float) -> None:
         timeout = self._timeout(deadline)
+        bounded_stream = _DeadlineBoundedStream(stream, self._clock, deadline)
         try:
             response = self._session.request(
-                "PUT", url, data=stream, headers={}, timeout=timeout,
+                "PUT", url, data=bounded_stream, headers={}, timeout=timeout,
                 allow_redirects=False,
             )
         except requests.RequestException as exc:
+            if self._clock() >= deadline:
+                raise MineruTimeout(
+                    "The local recognition budget elapsed during the PDF "
+                    "upload; the upload was aborted before it could complete."
+                ) from exc
             raise MineruNetworkError(
                 "The upload to MinerU storage failed before it completed.") from exc
+        # A request that returned only after the budget elapsed is still a
+        # timeout: the attempt must not be reported as a completed upload.
+        if self._clock() >= deadline:
+            raise MineruTimeout(
+                "The local recognition budget elapsed during the PDF upload; "
+                "the upload was aborted before it could complete.")
         if response.status_code not in (200, 201, 204):
             raise MineruUploadFailed(
                 f"Uploading the PDF to MinerU storage failed "

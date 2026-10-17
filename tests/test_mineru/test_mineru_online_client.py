@@ -341,3 +341,46 @@ def test_download_checks_interruption_and_the_deadline(tmp_path, monkeypatch):
                         deadline=clock() - 1)
     after = len(http.calls(lambda call: call["url"] == RESULT_URL))
     assert after == before, "an expired deadline must not issue a request"
+
+
+def test_upload_is_aborted_when_the_budget_runs_out(tmp_path, monkeypatch):
+    """A slow upload is bounded by the remaining budget, not just per-read.
+
+    The fake transport reads the real stream the client passes it, advancing a
+    fake clock between reads exactly like a throttled 50 MB upload would.
+    """
+    clock = FakeClock()
+    observed = {}
+    reads = []
+
+    class SlowUploadHttp(FakeMineruHttp):
+        def dispatch(self, method, url, **kwargs):
+            if method.upper() == "PUT" and url == UPLOAD_URL:
+                observed["attempts"] = observed.get("attempts", 0) + 1
+                observed["timeout"] = kwargs.get("timeout")
+                stream = kwargs.get("data")
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    reads.append(len(chunk))
+                    clock.advance(60)
+            return super().dispatch(method, url, **kwargs)
+
+    http = install_fake_http(monkeypatch, SlowUploadHttp())
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"x" * (6 * 1024 * 1024))
+    client = _client(clock)
+    ticket = _submit(client, clock)
+    started = clock()
+
+    with pytest.raises(MineruTimeout):
+        client.upload(ticket, source, deadline=started + 300)
+
+    assert clock() - started <= 300, "the upload ran past the local budget"
+    assert reads, "the fake transport never streamed the file"
+    assert len(reads) == 5, "the upload was not aborted inside the budget"
+    assert observed["attempts"] == 1
+    connect, read = observed["timeout"]
+    assert connect <= 300 and read <= 300
+    assert client.retries == 0

@@ -281,6 +281,51 @@ def test_a_paused_recognition_continues_the_same_remote_task_without_resubmissio
                and item["status"] == "completed" for item in history)
 
 
+def test_a_slow_upload_ends_at_the_budget_and_pauses_instead_of_completing(
+        web, monkeypatch):
+    """A throttled upload cannot outlive the attempt's 300-second budget.
+
+    Only the external HTTP transport and the clock are substituted: the real
+    client, the real recognition state and the real Web task workflow run.
+    """
+    import requests
+
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    with open(source, "ab") as stream:
+        # Large enough that a throttled 1 MB-per-100 s upload needs more than
+        # the local budget; a PDF reader ignores trailing bytes after %%EOF.
+        stream.write(b"\0" * (4 * 1024 * 1024))
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+
+    def slow_request(session, method, url, **kwargs):
+        if method.upper() == "PUT":
+            body = kwargs.get("data")
+            while True:
+                chunk = body.read(1024 * 1024)
+                if not chunk:
+                    break
+                web.clock.advance(100)
+        return web.http.dispatch(method, url, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", slow_request)
+
+    upload = web.upload(source)
+    translation_id, first = web.start_and_wait(upload)
+
+    # The attempt pauses on the local budget; it never claims a completed book.
+    assert first["status"] == "interrupted", first
+    assert first["error_code"] == "mineru_recognition_timeout"
+    assert first["accounting"] is None
+    assert web.download("book (French).pdf").status_code == 404
+    assert web.llm.calls == 0, "translation must not start after the upload timed out"
+    assert len(_submissions(web.http)) == 1
+
+    state = web.recognition_state(translation_id)
+    assert state.phase == "upload_failed"
+    assert state.error_code == "mineru_recognition_timeout"
+    assert state.elapsed_seconds <= 300, "the upload overran the local budget"
+
+
 def test_a_continued_attempt_grants_a_fresh_budget_without_faking_attempts(
         web, fake_clock):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
