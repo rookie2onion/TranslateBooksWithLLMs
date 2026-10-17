@@ -1,0 +1,42 @@
+name: Repository checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run existing lint hooks and offline unit gate
+        env:
+          CHECK_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PYTHON_DOTENV_DISABLED: '1'
+        run: |
+          base="${CHECK_BASE:-HEAD~1}"
+          if ! git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
+            if git rev-parse --verify 'HEAD~1^{commit}' >/dev/null 2>&1; then
+              base=HEAD~1
+            else
+              python scripts/check.py --all-files
+              exit $?
+            fi
+          fi
+          python scripts/check.py --base "$base"

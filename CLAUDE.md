@@ -59,3 +59,21 @@ Every user-facing string in the web frontend (`src/web/templates/`, `src/web/sta
 No ad-hoc test or debug scripts at the repo root. The patterns `check_*.py`, `test_*.py`, `debug_*.py`, `scratch_*.py`, `tmp_*.py` at the root are gitignored — this is intentional.
 
 The real entrypoints at the root are `translate.py`, `translation_api.py`, `launcher.py`. Real tests live under `tests/` (pytest) or `tests/standalone/` (manual scripts). If an ad-hoc script becomes useful long-term, move it into `tests/standalone/` or `scripts/` before committing it.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `rookie2onion/TranslateBooksWithLLMs`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
+
+### Validation
+
+Offline checks, the project interpreter and review freeze. See `docs/agents/validation.md`.
