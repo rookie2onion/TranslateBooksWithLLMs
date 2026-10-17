@@ -55,6 +55,7 @@ h1 { font-size: 20pt; } h2 { font-size: 16pt; } h3 { font-size: 13pt; }
 p.list { margin-left: 18pt; text-align: left; }
 .source { color: #666666; }
 p.img { text-align: center; margin: 6pt 0; }
+p.img-label { color: #666666; font-style: italic; font-size: 9pt; text-align: center; margin: 0 0 8pt 0; }
 table.grid { width: 100%; border-collapse: collapse; margin: 6pt 0; }
 table.grid td, table.grid th { padding: 3pt 4pt; vertical-align: top; text-align: left; border-bottom: 0.5pt solid #cccccc; }
 table.grid th { font-weight: bold; }
@@ -283,6 +284,11 @@ class _HtmlWriter:
                 f'style="width:{image.width_pt * scale:.1f}pt;'
                 f'height:{image.height_pt * scale:.1f}pt"/></p>'
             )
+            if image.label:
+                # Source-preserved content is never translated; say so in the
+                # rendition without sending this marker through the translator.
+                self.parts.append(
+                    f'<p class="img-label">{html.escape(image.label)}</p>')
 
     def _set_box(self, box: Optional[int]) -> None:
         """Close the open background box unless it is `box`, then open `box` if needed."""

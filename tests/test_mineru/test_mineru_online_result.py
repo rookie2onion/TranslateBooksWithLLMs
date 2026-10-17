@@ -16,10 +16,14 @@ import zipfile
 import pytest
 
 from src.core.mineru.admission import admit_pdf_source
-from src.core.mineru.errors import MineruResultInvalid
+from src.core.mineru.errors import MineruResultInvalid, MineruUnsupportedContent
 from src.core.mineru.result import build_online_result
 from src.core.mineru.structure import adapt
-from tests.test_mineru.online_fixtures import build_source_pdf, result_zip_bytes
+from tests.test_mineru.online_fixtures import (
+    build_source_pdf,
+    paragraph_block,
+    result_zip_bytes,
+)
 
 
 def _admitted(tmp_path, pages=3):
@@ -177,8 +181,8 @@ def test_an_image_path_escaping_the_result_is_rejected(tmp_path):
 def test_an_unsupported_block_type_fails_explicitly(tmp_path):
     admitted = _admitted(tmp_path, pages=1)
     pages = [[{
-        "type": "table",
-        "text": "unsupported table block",
+        "type": "chart",
+        "text": "unsupported chart block",
         "bbox": [10, 10, 200, 200],
     }]]
     archive = _write_zip(tmp_path, result_zip_bytes(page_count=1, pages=pages))
@@ -186,4 +190,24 @@ def test_an_unsupported_block_type_fails_explicitly(tmp_path):
     with pytest.raises(MineruResultInvalid) as raised:
         build_online_result(archive, work_dir=tmp_path / "work", admitted=admitted)
 
-    assert "table" in str(raised.value)
+    assert "chart" in str(raised.value)
+
+
+def test_an_inline_formula_fails_with_the_unsupported_content_code(tmp_path):
+    admitted = _admitted(tmp_path, pages=1)
+    pages = [[paragraph_block(
+        "Energy is conserved.",
+        [60, 80, 540, 140],
+        spans=[
+            {"type": "text", "content": "Energy is conserved: "},
+            {"type": "equation_inline", "content": "E = mc^2"},
+        ],
+    )]]
+    archive = _write_zip(tmp_path, result_zip_bytes(page_count=1, pages=pages))
+
+    with pytest.raises(MineruUnsupportedContent) as raised:
+        build_online_result(archive, work_dir=tmp_path / "work", admitted=admitted)
+
+    assert raised.value.code == "mineru_unsupported_content"
+    assert "inline formula" in str(raised.value)
+    assert "unsupported content" in str(raised.value)

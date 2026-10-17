@@ -35,8 +35,13 @@ from src.utils.security import (
 )
 
 from .admission import MAX_PAGES, AdmittedSource
-from .cache import MineruCache, MineruCacheError, load_cache
-from .errors import MineruResultInvalid
+from .cache import (
+    MineruCache,
+    MineruCacheError,
+    MineruUnsupportedContentError,
+    load_cache,
+)
+from .errors import MineruResultInvalid, MineruUnsupportedContent
 
 MAX_ARCHIVE_MEMBERS = 5_000
 MAX_ARCHIVE_EXPANDED_BYTES = 512 * 1024 * 1024
@@ -106,7 +111,7 @@ def load_validated_result(root: Path, *, admitted: AdmittedSource,
     try:
         cache = load_cache(root)
     except MineruCacheError as exc:
-        raise MineruResultInvalid(_sanitize_cache_error(exc, root)) from exc
+        raise _result_error(exc, root) from exc
     _verify_identity(cache, admitted)
     cache_sha256 = cache_fingerprint(cache)
     if expected_cache_sha256 and cache_sha256 != expected_cache_sha256:
@@ -222,7 +227,7 @@ def _load_cache(root: Path, admitted: AdmittedSource) -> MineruCache:
     try:
         cache = load_cache(root)
     except MineruCacheError as exc:
-        raise MineruResultInvalid(_sanitize_cache_error(exc, root)) from exc
+        raise _result_error(exc, root) from exc
     _verify_identity(cache, admitted)
     return cache
 
@@ -245,10 +250,18 @@ def _verify_identity(cache: MineruCache, admitted: AdmittedSource) -> None:
         raise MineruResultInvalid("The admitted source exceeds the recognition page limit.")
 
 
-def _sanitize_cache_error(exc: MineruCacheError, root: Path) -> str:
+def _result_error(exc: MineruCacheError, root: Path) -> MineruResultInvalid:
+    """Map a loader failure to its stable Web error category.
+
+    A recognised-but-unpreservable construct gets its own code so the UI can
+    state the limitation, instead of reusing the generic "result invalid" text.
+    """
     text = _ABSOLUTE_PATH_RE.sub("<path>", str(exc))
     text = text.replace(str(root.parent), "<result>").replace(str(root), "<result>")
-    return f"The recognition result did not validate: {text}"
+    if isinstance(exc, MineruUnsupportedContentError):
+        return MineruUnsupportedContent(
+            f"The recognition result contains unsupported content: {text}")
+    return MineruResultInvalid(f"The recognition result did not validate: {text}")
 
 
 def _sha256_file(path: Path) -> str:

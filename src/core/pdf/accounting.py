@@ -144,6 +144,17 @@ def build_accounting(
     findings = [getattr(item, "code", "") for item in
                 (getattr(source_view, "findings", ()) or ())]
 
+    # Ordinary figures and source-preserved table/formula images share the
+    # anchored image list in the renderer; count them separately here and never
+    # mix them into the translated-text or failed-chunk counters.
+    images = [image for items in content.images_by_paragraph.values() for image in items]
+    figure_count = sum(1 for image in images if not getattr(image, "label", ""))
+    preserved_from_content = sum(1 for image in images
+                                 if getattr(image, "label", ""))
+    source_preserved = int(counts.get("source_preserved", preserved_from_content) or 0)
+    tables = int(counts.get("tables", 0) or 0)
+    formulas = int(counts.get("formulas", 0) or 0)
+
     return {
         "schema_version": ACCOUNTING_SCHEMA_VERSION,
         "kind": ACCOUNTING_KIND,
@@ -174,7 +185,12 @@ def build_accounting(
             "blocks_accounted": int(counts.get("blocks_accounted", 0) or 0),
             "blocks_unaccounted": int(counts.get("blocks_unaccounted", 0) or 0),
             "paragraphs": len(content.paragraphs_text),
-            "images": sum(len(items) for items in content.images_by_paragraph.values()),
+            "images": figure_count,
+            # Deliberately preserved source images, counted separately from both
+            # translated text and failed translation chunks.
+            "source_preserved": source_preserved,
+            "tables": tables,
+            "formulas": formulas,
             "captions": captions,
             "footnotes": footnotes,
             "excluded": int(counts.get("excluded", 0) or 0),
@@ -251,6 +267,9 @@ def read_accounting_summary(output_path: Path) -> Optional[Dict[str, Any]]:
         "result_pages": recognition.get("pages"),
         "paragraphs": content.get("paragraphs"),
         "images": content.get("images"),
+        "source_preserved": content.get("source_preserved"),
+        "tables": content.get("tables"),
+        "formulas": content.get("formulas"),
         "captions": content.get("captions"),
         "footnotes": content.get("footnotes"),
         "excluded": content.get("excluded"),

@@ -102,9 +102,9 @@ def test_load_cache_rejects_page_mapping_mismatch(tmp_path):
 
 def test_load_cache_rejects_unsupported_block_type(tmp_path):
     root = build_cache(tmp_path / "cache")
-    _edit_v2(root, lambda pages: pages[0][0].update(type="table"))
+    _edit_v2(root, lambda pages: pages[0][0].update(type="chart"))
 
-    with pytest.raises(MineruCacheError, match="unsupported type 'table'"):
+    with pytest.raises(MineruCacheError, match="unsupported type 'chart'"):
         load_cache(root)
 
 

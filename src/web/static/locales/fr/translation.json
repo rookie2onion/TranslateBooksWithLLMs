@@ -108,6 +108,7 @@
   "srt_completion_tip_block_size": "Réduisez le nombre de sous-titres par requête (SRT_LINES_PER_BLOCK dans votre fichier .env, p. ex. 5 au lieu de 10) — des blocs plus courts sont plus faciles à reproduire marqueur par marqueur.",
   "completion_card_dismiss": "Ignorer",
   "completion_failed_chunks": "{{count}} échec(s)",
+  "completion_source_preserved": "{{count}} image(s) source conservée(s), non traduite(s)",
   "completion_fallback_chunks": "{{count}} repli(s) de formatage",
   "completion_placeholder_errors": "{{count}} imperfection(s) de formatage",
   "completion_paragraph_realigned": "{{count}} réalignement(s) de paragraphes",
@@ -315,5 +316,6 @@
   "mineru_error_response_invalid": "MinerU a renvoyé une réponse inattendue. Aucune nouvelle soumission n'a été faite.",
   "mineru_error_provider_rejected": "MinerU a refusé la demande de reconnaissance. Vérifiez le jeton configuré et le document source.",
   "mineru_error_result_invalid": "Le résultat de reconnaissance ne correspond pas à ce PDF ou est incomplet ; aucun livre n'a été produit.",
-  "mineru_error_output_invalid": "Le PDF traduit a échoué à la validation ; il n'a pas été publié."
+  "mineru_error_output_invalid": "Le PDF traduit a échoué à la validation ; il n'a pas été publié.",
+  "mineru_error_unsupported_content": "Ce PDF contient du contenu reconnu que l’application ne peut pas encore préserver de façon fiable (par exemple une formule en ligne) ; aucun livre n’a donc été produit. Le PDF source est inchangé."
 }

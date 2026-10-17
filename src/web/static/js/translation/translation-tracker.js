@@ -1013,6 +1013,15 @@ export const TranslationTracker = {
             items.push(`<span class="completion-card__stat--error">${t('translation:completion_warning_untranslated', { count: untranslated })}</span>`);
         }
 
+        // Deliberately preserved source content (tables/formulas kept as
+        // source images). The durable accounting counts it separately from
+        // failed or unfinished translation chunks, so it is reported as policy
+        // information, never as an error.
+        const sourcePreserved = (resultData.accounting || {}).source_preserved || 0;
+        if (sourcePreserved > 0) {
+            items.push(t('translation:completion_source_preserved', { count: sourcePreserved }));
+        }
+
         if (fallbacks > 0) {
             items.push(`<span class="completion-card__stat--warn">${t('translation:completion_fallback_chunks', { count: fallbacks })}</span>`);
         }
