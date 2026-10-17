@@ -45,9 +45,12 @@ class _FakeSocketIO:
 
     def __init__(self):
         self.events = []
+        self.on_emit = None
 
     def emit(self, event, data=None, namespace=None, **kwargs):
         self.events.append((event, data, namespace))
+        if self.on_emit is not None:
+            self.on_emit(event, data, namespace)
 
 
 @pytest.fixture
@@ -70,10 +73,12 @@ def web(tmp_path, monkeypatch):
     )
     app.config["TESTING"] = True
 
+    socket = _FakeSocketIO()
+
     def start_job(translation_id, config):
         from src.api.handlers import start_translation_job
         start_translation_job(
-            translation_id, config, state_manager, str(output_dir), _FakeSocketIO())
+            translation_id, config, state_manager, str(output_dir), socket)
 
     configure_routes(app, state_manager, str(output_dir), start_job)
     api_auth.register_auth(app)
@@ -91,7 +96,7 @@ def web(tmp_path, monkeypatch):
     yield SimpleNamespace(
         app=app, client=client, output_dir=output_dir, uploads_dir=uploads_dir,
         state_manager=state_manager, manager=checkpoint_manager, http=http,
-        llm=llm, tmp_path=tmp_path,
+        llm=llm, tmp_path=tmp_path, socket=socket,
     )
     checkpoint_manager.close()
 
@@ -364,6 +369,7 @@ def test_an_incomplete_recognition_result_is_not_published(web):
     assert status["status"] == "error"
     assert status["error_code"] == "mineru_result_invalid"
     assert "page" in (status["error"] or "").lower()
+    assert web.manager.get_job(response.get_json()["translation_id"])["status"] == "error"
     assert _download(web, "incomplete.pdf").status_code == 404
     assert not _sidecar_path(web.output_dir, "incomplete.pdf").exists()
 
@@ -418,6 +424,93 @@ def test_bilingual_option_still_applies_to_the_translated_book(web):
     text = _pdf_text(downloaded.data)
     assert "FR: SAMPLE BOOK" in text
     assert text.count("SAMPLE BOOK") >= 2
+
+
+def _start_txt_job(web, upload, output_filename="story (French).txt"):
+    return web.client.post("/api/translate", json={
+        "file_path": upload["file_path"],
+        "file_type": "txt",
+        "source_language": "English",
+        "target_language": "French",
+        "model": "test-model",
+        "llm_api_endpoint": "http://localhost:11434/api/generate",
+        "llm_provider": "ollama",
+        "output_filename": output_filename,
+        "prompt_options": {},
+    })
+
+
+def test_a_failed_non_pdf_job_keeps_the_startup_sweep_contract(web, monkeypatch):
+    """Ticket 05: non-PDF failures stay 'running' in the DB, as before.
+
+    Only PDF/MinerU jobs gained the immediate mark_error; the startup sweep
+    remains the recovery path for every other format.
+    """
+    text_file = web.tmp_path / "story.txt"
+    text_file.write_text("Once upon a time.\n\nA second paragraph.\n", encoding="utf-8")
+    upload = _upload(web, text_file)
+
+    async def failing_translation(*args, **kwargs):
+        raise RuntimeError("fake translation failure")
+
+    monkeypatch.setattr(
+        "src.api.handlers.translate_file", failing_translation)
+
+    response = _start_txt_job(web, upload)
+    assert response.status_code == 200, response.get_json()
+    translation_id = response.get_json()["translation_id"]
+    status = _wait_for_terminal(web, translation_id)
+
+    assert status["status"] == "error", status
+    assert web.manager.get_job(translation_id)["status"] == "running", (
+        "a failed non-PDF job must stay for the startup sweep")
+
+
+def test_completion_emit_order_is_unchanged_for_non_pdf(web):
+    """Non-PDF jobs still set the terminal status before emitting the payload."""
+    text_file = web.tmp_path / "story.txt"
+    text_file.write_text("Once upon a time.\n\nA second paragraph.\n", encoding="utf-8")
+    upload = _upload(web, text_file)
+
+    seen = []
+
+    def on_emit(event, data, namespace):
+        if (event == "translation_update" and isinstance(data, dict)
+                and data.get("status") == "completed"):
+            seen.append(web.state_manager.get_translation_field(
+                data["translation_id"], "status"))
+
+    web.socket.on_emit = on_emit
+    response = _start_txt_job(web, upload)
+    status = _wait_for_terminal(web, response.get_json()["translation_id"])
+
+    assert status["status"] == "completed", status
+    assert seen == ["completed"], (
+        "the non-PDF completion emit must observe the already-terminal state")
+
+
+def test_pdf_completion_payload_is_emitted_before_the_terminal_status(web):
+    """PDF jobs keep the ordering guarantee added with whole-book completion."""
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+
+    upload = _upload(web, source)
+    seen = []
+
+    def on_emit(event, data, namespace):
+        if (event == "translation_update" and isinstance(data, dict)
+                and data.get("status") == "completed"):
+            seen.append(web.state_manager.get_translation_field(
+                data["translation_id"], "status"))
+
+    web.socket.on_emit = on_emit
+    response = _start(web, upload)
+    status = _wait_for_terminal(web, response.get_json()["translation_id"])
+
+    assert status["status"] == "completed", status
+    assert seen, "the completion payload was never emitted"
+    assert seen[0] != "completed", (
+        "a poller could observe a completed job before its payload")
 
 
 def test_non_pdf_workflow_is_unchanged(web):
