@@ -13,12 +13,13 @@ why the state is trustworthy before a provider request is issued.
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
+
+from src.utils.atomic_io import write_json_atomic
 
 from .errors import MineruStateUnavailable
 
@@ -154,7 +155,7 @@ def write_state(directory: Path, state: RecognitionState) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / STATE_FILE_NAME
     try:
-        dump_json_atomic(path, state.to_dict())
+        write_json_atomic(path, state.to_dict())
     except MineruStateUnavailable:
         raise
     except (OSError, ValueError) as exc:
@@ -191,25 +192,6 @@ def delete_state(directory: Path) -> None:
     except OSError as exc:
         raise MineruStateUnavailable(
             "The recorded recognition state could not be removed.") from exc
-
-
-def dump_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
-    """Write JSON atomically: sibling part file, fsync, then replace."""
-    temporary = path.with_suffix(path.suffix + ".part")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(dict(payload), stream, ensure_ascii=False, indent=2)
-            stream.flush()
-            try:
-                os.fsync(stream.fileno())
-            except OSError:  # pragma: no cover - fsync support varies by filesystem
-                pass
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:  # pragma: no cover - best-effort cleanup
-            pass
 
 
 class TaskRecognitionStore:

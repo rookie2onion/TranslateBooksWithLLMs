@@ -21,11 +21,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
+from src.utils.atomic_io import write_json_atomic
 from src.utils.hashing import sha256_file
 
 from .cache import KNOWN_BLOCK_TYPES, MineruCache
 from .epub_preview import image_resource_name
-from .export import MineruExportError, ensure_output_outside_cache, write_json_atomic
+from .export import MineruExportError, ensure_output_outside_cache
 from .structure import Reconstruction, adapt, apply_preview_decoration
 
 SCHEMA_VERSION = 1

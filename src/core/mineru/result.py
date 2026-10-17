@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.utils.atomic_io import write_json_atomic
 from src.utils.hashing import sha256_file
 from src.utils.security import (
     SecurityError,
@@ -212,16 +213,7 @@ def _write_source_manifest(root: Path, admitted: AdmittedSource) -> None:
         "sample_sha256": admitted.sha256,
         "translation_llm_called": False,
     }
-    temporary = root / (MANIFEST_NAME + ".part")
-    with temporary.open("w", encoding="utf-8") as stream:
-        json.dump(info, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        try:
-            import os
-            os.fsync(stream.fileno())
-        except OSError:  # pragma: no cover - fsync support varies
-            pass
-    temporary.replace(root / MANIFEST_NAME)
+    write_json_atomic(root / MANIFEST_NAME, info)
 
 
 def _load_cache(root: Path, admitted: AdmittedSource) -> MineruCache:

@@ -30,6 +30,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from src.core.common.plain_text_checkpoint import paragraph_mapping_sha256
 from src.core.mineru.errors import MineruOutputInvalid
+from src.utils.atomic_io import write_json_atomic
 from src.utils.hashing import sha256_file
 
 from .content import PdfPlainContent
@@ -287,21 +288,7 @@ def build_accounting(
 def write_accounting_sidecar(output_path: Path, accounting: Mapping[str, Any]) -> Path:
     """Write the sidecar atomically next to the finished book."""
     path = accounting_path_for(output_path)
-    temporary = path.with_suffix(path.suffix + ".part")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(dict(accounting), stream, ensure_ascii=False, indent=2)
-            stream.flush()
-            try:
-                os.fsync(stream.fileno())
-            except OSError:  # pragma: no cover - fsync support varies
-                pass
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:  # pragma: no cover - best-effort cleanup
-            pass
+    write_json_atomic(path, accounting)
     return path
 
 
