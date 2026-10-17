@@ -196,8 +196,11 @@ def test_every_server_error_code_has_a_web_localization():
     english = _load("en")
     for code in _error_codes():
         key = f"mineru_error_{code[len('mineru_'):]}"
-        assert english.get(key), f"missing translation key for {code}"
-        assert f"translation:{key}" not in json.dumps(english) or True
+        message = english.get(key)
+        assert message, f"missing translation key for {code}"
+        # The localized message is human prose; leaking the stable code into it
+        # would surface an untranslated technical token to the reader.
+        assert code not in message
 
 
 def test_the_js_code_set_matches_the_server_error_codes():

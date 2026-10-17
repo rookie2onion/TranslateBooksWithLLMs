@@ -63,7 +63,11 @@ def web(tmp_path, monkeypatch):
         checkpoint_manager=checkpoint_manager, server_session_id=str(int(time.time())))
     auth_state = api_auth.API_TOKEN
 
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        template_folder=str(
+            Path(__file__).resolve().parents[2] / "src" / "web" / "templates"),
+    )
     app.config["TESTING"] = True
 
     def start_job(translation_id, config):
@@ -157,6 +161,34 @@ def _sidecar_path(output_dir, filename):
     return Path(output_dir) / (filename + ".accounting.json")
 
 
+def _assert_provider_credential_is_not_browser_visible(web, translation_id, status):
+    """No browser-visible surface may echo the MinerU account token.
+
+    The token lives only in the server environment; the job config carries the
+    authorization boolean, never the credential. Inspect every payload a page
+    actually receives: the status response, the translation/history lists, the
+    rendered HTML, and the JS bootstrap config.
+    """
+    assert status["config"]["mineru_authorized"] is True
+    assert "mineru_token" not in status["config"]
+    assert "mineru_api_token" not in status["config"]
+
+    payloads = {
+        "status": json.dumps(web.client.get(
+            f"/api/translation/{translation_id}").get_json()),
+        "translations": json.dumps(
+            web.client.get("/api/translations").get_json()),
+        "history": json.dumps(web.client.get("/api/history").get_json()),
+        "html": web.client.get("/").get_data(as_text=True),
+        "js_config": json.dumps(web.client.get("/api/config").get_json()),
+    }
+    for surface, body in payloads.items():
+        assert PROVIDER_TOKEN not in body, (
+            f"the MinerU token leaked into {surface}")
+        assert "mineru_api_token" not in body.lower(), (
+            f"the MinerU token field leaked into {surface}")
+
+
 def test_authorized_text_pdf_completes_and_downloads_a_translated_book(web):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=3)
     web.http.zip_bytes = result_zip_bytes(page_count=3)
@@ -173,7 +205,7 @@ def test_authorized_text_pdf_completes_and_downloads_a_translated_book(web):
     assert status["accounting"]["source_pages"] == 3
     assert status["accounting"]["result_pages"] == 3
     assert status["accounting"]["failed_chunks"] == 0
-    assert "mineru" not in json.dumps(status.get("config", {})).lower() or True
+    _assert_provider_credential_is_not_browser_visible(web, translation_id, status)
 
     downloaded = _download(web, "book (French).pdf")
     assert downloaded.status_code == 200
