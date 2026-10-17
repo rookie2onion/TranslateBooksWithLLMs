@@ -1,13 +1,14 @@
 # MinerU Online PDF Translation: Offline Release Verification (Ticket #24)
 
 Status: **offline verification complete on integration tip `271b2cc` (branch tip
-now `399ec19`), and one bounded live sample passed on 2026-10-17. Release
-acceptance is not complete.** The 198-page reference-book run, a live
-five-minute pause plus continuation, browser smoke, and human visual acceptance
-remain **PENDING**. Issue
-[#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) must stay
-open. This report does not claim release completion, recognition accuracy, or
-translation quality.
+now `77eb24c`). A five-page and a twenty-page authorized live run passed with
+real MinerU recognition and DeepSeek translation; the twenty-page run required a
+`page_footer` contract fix (`77eb24c`).** The live five-minute pause plus
+continuation, browser smoke, and final operator/human acceptance remain
+**PENDING**. Issue
+[#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) stays
+open until the operator confirms acceptance. This report does not claim
+recognition accuracy or translation quality.
 
 ## Scope and limits
 
@@ -307,15 +308,41 @@ Not observed live: a pause at the five-minute local budget and its continuation
 download is recorded in the private evidence, but it is not the 5-minute-pause
 scenario.
 
+### Twenty-page acceptance run (operator bar)
+
+The operator then set the acceptance bar at a twenty-page live run. The first
+attempt failed closed at result validation with `mineru_result_invalid`: the
+online V2 result contained `page_footer` blocks (two instances) that the loader
+did not recognise. The loader and adapter were extended to treat typed page
+footers as running matter in the bottom margin, with an explicit exclusion
+reason, and to retain a footer outside that band with a review finding
+(`77eb24c`, three new tests). Unknown types remain fail-closed.
+
+The same job then continued from its saved recognition result (no re-upload and
+no resubmission) and completed:
+
+- Recognition: 20/20 pages, 230/230 recognised blocks accounted for, 0
+  unaccounted, 36 justified exclusions (including the two page footers), 29
+  image instances, `coverage.complete: true`.
+- Translation: 59/59 chunks, 0 failed; 230.8 s for the resumed translation run.
+  Output: 23-page reflowed PDF, 19,859 characters, 16,522 CJK characters, 29
+  images.
+- Metadata: title `STADTPLANUNG`, empty author, no preview notice or suffix; the
+  accounting sidecar reports complete coverage with the same honest limitations
+  (`recognition_accuracy_proven: false`, `every_visible_word_translated: false`).
+- The two page footers are excluded as running matter and do not appear as body
+  text.
+
+**Result: PASS after the fix.**
+
 ## What remains for #24 to stay open
 
 - **Live five-minute pause and continuation:** the bounded sample finished in
   88 s, so a budget pause and its continuation were not observed live.
-- **198-page reference book:** separate/confirmed authorization, then the
-  whole-book run. Verify expected source-page coverage, block accounting,
-  source-preserved identification, image/caption/note order, metadata, artifact
-  validity, and recoverability/cleanup. Reflowed output need not match the
-  source page count or geometry.
+- **Operator acceptance bar:** the operator set the bar at a twenty-page live
+  run, which passed after the `page_footer` fix. A 198-page run was not
+  requested; if it is later requested, it needs its own authorization and
+  whole-book checks.
 - **Runtime browser smoke:** coverage chip, empty-page chip, limitation note,
   both report-download buttons, per-task PDF consent ticks, and a seven-locale
   switch without reload while authorization/progress/pause/Continue/completion/
@@ -327,10 +354,10 @@ scenario.
   accounting as semantic-quality proof.
 - **Private artifacts:** retain under existing ignored storage; publish only
   redacted summaries with explicit pass/fail/pending states.
-- **Release decision:** leave
-  [#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) open.
-  This report is offline evidence only and must not be read as release
-  completion.
+- **Release decision:** keep
+  [#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) open
+  until the operator confirms acceptance. Automated accounting is not semantic
+  proof.
 
 ## Redaction and data handling
 
