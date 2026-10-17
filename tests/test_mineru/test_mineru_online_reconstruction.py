@@ -3,7 +3,7 @@
 Seams under test:
 - A: ``src.core.mineru.cache.load_cache`` — cache validation and provenance binding.
 - B: ``src.core.mineru.structure.adapt`` — content model, reading order, exclusions.
-- C: ``src.core.mineru.pdf_preview.build_preview`` — real PDF plus provenance sidecar.
+- C: ``src.core.mineru.pdf_preview.build_pdf_preview`` — real PDF plus provenance sidecar.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 
 from src.core.mineru.cache import MineruCacheError, load_cache
-from src.core.mineru.pdf_preview import MineruExportError, build_preview
+from src.core.mineru.pdf_preview import MineruExportError, build_pdf_preview
 from src.core.mineru.structure import adapt
-from tests.test_pdf.mineru_fixture import (
+from tests.test_mineru.mineru_fixture import (
     SAMPLE_SHA256,
     SOURCE_SHA256,
     build_cache,
@@ -201,12 +201,12 @@ def test_adapt_maps_pages_and_counts_blocks(tmp_path):
     assert reconstruction.counts["excluded"] == len(reconstruction.exclusions)
 
 
-def test_build_preview_writes_pdf_and_provenance(tmp_path):
+def test_build_pdf_preview_writes_pdf_and_provenance(tmp_path):
     import pymupdf
 
     cache = _load(tmp_path, source_pages=[1, 19])
 
-    result = build_preview(cache, tmp_path / "out")
+    result = build_pdf_preview(cache, tmp_path / "out")
 
     assert result.pdf_path.is_file() and result.pdf_path.stat().st_size > 0
     assert result.provenance_path.is_file()
@@ -240,7 +240,7 @@ def test_build_preview_writes_pdf_and_provenance(tmp_path):
     assert len(image_record["image_sha256"]) == 64
 
 
-def test_build_preview_never_opens_a_network_socket(tmp_path, monkeypatch):
+def test_build_pdf_preview_never_opens_a_network_socket(tmp_path, monkeypatch):
     import socket
 
     def _refuse(*args, **kwargs):
@@ -250,34 +250,34 @@ def test_build_preview_never_opens_a_network_socket(tmp_path, monkeypatch):
     monkeypatch.setattr(socket, "create_connection", _refuse)
     cache = _load(tmp_path, source_pages=[1, 19])
 
-    result = build_preview(cache, tmp_path / "out")
+    result = build_pdf_preview(cache, tmp_path / "out")
 
     assert result.pdf_path.is_file()
 
 
-def test_build_preview_leaves_the_cache_byte_identical(tmp_path):
+def test_build_pdf_preview_leaves_the_cache_byte_identical(tmp_path):
     root = build_cache(tmp_path / "cache", source_pages=[1, 19])
     before = tree_fingerprint(root)
     cache = load_cache(root)
 
-    build_preview(cache, tmp_path / "out")
+    build_pdf_preview(cache, tmp_path / "out")
 
     assert tree_fingerprint(root) == before
 
 
-def test_build_preview_refuses_to_write_inside_the_cache(tmp_path):
+def test_build_pdf_preview_refuses_to_write_inside_the_cache(tmp_path):
     cache = _load(tmp_path, source_pages=[1, 19])
 
     with pytest.raises(MineruExportError, match="inside the cache"):
-        build_preview(cache, cache.root / "out")
+        build_pdf_preview(cache, cache.root / "out")
 
 
-def test_build_preview_flags_review_when_structure_is_suspect(tmp_path):
+def test_build_pdf_preview_flags_review_when_structure_is_suspect(tmp_path):
     pages = default_pages()
     pages[1]["blocks"][0]["bbox"] = [600, 400, 900, 420]  # header in the body area
     cache = _load(tmp_path, pages=pages, source_pages=[1, 19])
 
-    result = build_preview(cache, tmp_path / "out")
+    result = build_pdf_preview(cache, tmp_path / "out")
 
     provenance = json.loads(result.provenance_path.read_text(encoding="utf-8"))
     assert result.review_required is True

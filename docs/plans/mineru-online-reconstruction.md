@@ -1,11 +1,13 @@
 # MinerU Online Reconstruction: Progress and Evidence
 
-Status: #14 is implemented and verified offline on branch
-`feat/mineru-online-vlm`. #15 (EPUB export) and #16 (dual-format acceptance
-package) are pending. No provider call, upload or translation LLM was used by
-any step below.
+Status: #14 is implemented, reviewed and committed (`52fd47a`) on branch
+`feat/mineru-online-vlm`. #15 (EPUB export) is implemented and awaiting review;
+#16 (dual-format acceptance package) is pending. No provider call, upload or
+translation LLM was used by any step below.
 
-Issue: [#14 Reconstruct the cached MinerU sample as a source-language PDF](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/14).
+Issues: [#14 PDF](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/14),
+[#15 EPUB](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/15),
+[#16 acceptance package](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/16).
 
 ## Scope
 
@@ -18,9 +20,9 @@ recognition cache remain under Git-ignored `data/`.
 
 | Ticket | State | Evidence |
 | --- | --- | --- |
-| #14 Reconstruct the cached sample as a source-language PDF | Implemented, awaiting code review | 17 focused tests and 228 PDF regression tests pass; real probe run produced a 10-page PDF; provenance counts match the cache. |
-| #15 Export the reconstructed sample as EPUB | Pending | Reuses `src.core.mineru.structure.Reconstruction`. |
-| #16 Dual-format acceptance package | Pending | Consumes `preview.provenance.json` plus the upcoming EPUB provenance. |
+| #14 Reconstruct the cached sample as a source-language PDF | Implemented, reviewed, committed (`52fd47a`) | 17 focused tests and 228 PDF regression tests pass; real probe run produced a 10-page PDF; provenance counts match the cache. |
+| #15 Export the reconstructed sample as EPUB | Implemented, awaiting code review | 8 focused tests; real probe run produced a 4-section EPUB with 43 paragraphs and 10 images; byte-deterministic output; shared provenance. |
+| #16 Dual-format acceptance package | Pending | Consumes both `preview.provenance.json` files. |
 
 ## Decisions
 
@@ -34,7 +36,16 @@ recognition cache remain under Git-ignored `data/`.
 - Empty records are counted (`empty_record`) rather than silently skipped.
 - The preview refuses to write inside the cache directory and renders through
   the existing `build_pdf` story pipeline; no new renderer was introduced.
-- `preview.provenance.json` is the contract #15 and #16 consume.
+- The EPUB renderer reuses the same `Reconstruction`: sections start at
+  recognised level-1 headings, navigation nests level-2/3 headings, and the spine
+  orders the sections. It does not read the generated PDF or re-extract content.
+- EPUB metadata uses trusted input only: explicit `--language` (default `und`)
+  and the first level-1 heading or `--title`. No `dc:creator` is written because
+  the cache has no trusted author field.
+- EPUB output is byte-deterministic (fixed ZIP timestamps, UUID derived from the
+  sample hash, language and title), and `reader_check.performed` records that no
+  reader application was opened.
+- `preview.provenance.json` is the shared contract for both formats and #16.
 
 ## Review disposition
 
@@ -55,13 +66,20 @@ where noted:
   visible in the exclusion reason.
 - Reading order, RTL layout and author inference are documented limitations
   rather than silent assumptions.
+- The EPUB review found a synthetic "Front matter" chapter and a preview suffix
+  on the package title. Sections now come only from recognised level-1 headings
+  (pre-heading content joins the first section), the title is `--title` or the
+  first level-1 heading, and the build fails when neither exists.
+- EPUB tests now also cover navigation anchor targets, the absence of a
+  fabricated front-matter chapter, the trusted-title failure, and the CLI
+  `--format epub --language --title` path.
 - `tests/standalone/mineru_online_probe.py` stays untracked and out of this
   commit; it produced the authorized cache and performs uploads, which this
   offline slice must not do.
 
 ## Evidence
 
-Focused offline tests (`tests/test_pdf/test_mineru_online_reconstruction.py`):
+Focused offline tests (`tests/test_mineru/test_mineru_online_reconstruction.py`):
 
 - cache validation: missing layout, missing image, path escape, page-mapping
   mismatch, unsupported block type;
@@ -88,17 +106,34 @@ footnotes plus one image credit) and 1 generated notice. The PDF metadata title
 is `STADTPLANUNG — untranslated MinerU sample preview`; the notice states the
 partial, untranslated scope.
 
+EPUB focused tests (`tests/test_mineru/test_mineru_online_epub.py`) cover the
+package container and mimetype entry, OPF metadata and unique identifier,
+manifest/spine/navigation consistency, XHTML well-formedness, image references,
+deterministic bytes, explicit language and title, the unperformed reader check,
+network refusal, cache preservation and output-inside-cache refusal.
+
+Real EPUB evidence (`data/mineru-online/recon-001-epub/`, Git-ignored):
+
+```text
+Wrote data\mineru-online\recon-001-epub\preview.epub (3 section(s), 43 paragraphs, 10 image(s)).
+counts: blocks_seen 65, blocks_accounted 65, blocks_unaccounted 0, paragraphs 43,
+        images 10, excluded 14, empty_records 8, findings 4, review_findings 0
+epub: sections 3, images 10, paragraphs 43, bytes 870056
+reader_check.performed: false
+review_required: false
+```
+
 ## Not proven
 
 Visual fidelity, whole-book reading order, table and formula handling, image
-redrawing, EPUB structure and translation quality. The sample has no accepted
-table case. Reading order follows the service's V2 block order; the adapter does
-not re-derive columns, and the sample's column-major order was only inspected
-manually. Right-to-left source layout and typographic-ligature-free text
-extraction are not handled.
+redrawing and translation quality. The sample has no accepted table case. Reading
+order follows the service's V2 block order; the adapter does not re-derive
+columns, and the sample's column-major order was only inspected manually.
+Right-to-left source layout and typographic-ligature-free text extraction are not
+handled. The EPUB package passes structural checks but was not opened in a
+reader and was not run through `epubcheck`.
 
 ## Next
 
-- #15: export the same `Reconstruction` as EPUB with shared provenance.
 - #16: collect the source contact sheet, PDF, EPUB and a comparison report with
   machine-readable checks.

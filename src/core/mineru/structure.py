@@ -93,6 +93,7 @@ class Reconstruction:
 
     title: str
     author: str
+    notice: str
     page_size: Tuple[float, float]
     paragraphs: Tuple[str, ...]
     styles: Tuple[str, ...]
@@ -185,10 +186,12 @@ def adapt(cache: MineruCache) -> Reconstruction:
                     f"retained as a paragraph for review.",
             sample_page=block.page_index, block_index=block.index, severity="review"))
 
-    emit(_notice_text(cache), _NOTICE_KIND, "normal", ParagraphFormat(italic=True))
+    notice = _notice_text(cache)
+    emit(notice, _NOTICE_KIND, "normal", ParagraphFormat(italic=True))
 
     first_title = next((block for block in cache.blocks
-                        if block.type == "title" and block.text.strip()), None)
+                        if block.type == "title" and (block.level or 1) == 1
+                        and block.text.strip()), None)
     for block in cache.blocks:
         page = cache.pages[block.page_index]
         text = block.text.strip()
@@ -286,6 +289,7 @@ def adapt(cache: MineruCache) -> Reconstruction:
     return Reconstruction(
         title=first_title.text.strip() if first_title else "",
         author=author,
+        notice=notice,
         page_size=(first_page.width_pt, first_page.height_pt),
         paragraphs=tuple(paragraphs),
         styles=tuple(styles),
