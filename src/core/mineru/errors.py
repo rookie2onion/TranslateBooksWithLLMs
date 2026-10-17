@@ -74,9 +74,27 @@ class MineruStateUnavailable(MineruError):
 
 
 class MineruContinuationUnavailable(MineruError):
-    """Safe continuation is not implemented yet, so the attempt fails closed."""
+    """The saved phase cannot be continued automatically, so nothing is resubmitted."""
 
     code = "mineru_continuation_unavailable"
+
+
+class MineruContinuationSourceChanged(MineruContinuationUnavailable):
+    """The saved work belongs to different source bytes than the current file."""
+
+    code = "mineru_continuation_source_changed"
+
+
+class MineruContinuationResultUnavailable(MineruContinuationUnavailable):
+    """The validated result is missing or no longer matches its recorded identity."""
+
+    code = "mineru_continuation_result_unavailable"
+
+
+class MineruContinuationUploadUnrecoverable(MineruContinuationUnavailable):
+    """An incomplete upload's one-time destination is not retained or recoverable."""
+
+    code = "mineru_continuation_upload_unrecoverable"
 
 
 class MineruSubmissionUncertain(MineruError):

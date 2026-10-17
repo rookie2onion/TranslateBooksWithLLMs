@@ -667,66 +667,31 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         if not checkpoint_data:
             return jsonify({"error": "No checkpoint found for this translation"}), 404
 
-        # Restore job into state manager
-        restored = state_manager.restore_job_from_checkpoint(translation_id)
-        if not restored:
-            return jsonify({"error": "Failed to restore job from checkpoint"}), 500
+        # Claim this job's single active execution *before* restoring or
+        # starting it. Two concurrent Continue requests (or a double click) can
+        # both pass the global active-job check above; only one acquires this
+        # claim, so at most one worker can re-open the saved recognition task
+        # and no duplicate provider submission is possible.
+        if not state_manager.claim_execution(translation_id):
+            return jsonify({
+                "error": "Cannot resume: this job is already running",
+                "message": "This job already has an active execution; wait for "
+                           "it to pause or finish before continuing it again.",
+                "active_translations": [{
+                    "id": translation_id,
+                    "status": "running",
+                    "output_filename": checkpoint_data['job'].get('config', {}).get(
+                        'output_filename', 'unknown'),
+                }],
+            }), 409
 
-        # Get job config and add resume parameters
-        job = checkpoint_data['job']
-        config = copy.deepcopy(job['config'])  # Create a deep copy to avoid mutating the stored config
-
-        # Get preserved input file path if exists
-        # Always use preserved_input_path from config (stored during job creation)
-        # This ensures consistent file path across multiple resume cycles
-        preserved_path = config.get('preserved_input_path')
-        if preserved_path:
-            # Verify that the preserved file actually exists
-            from pathlib import Path
-            if Path(preserved_path).exists():
-                config['file_path'] = preserved_path
-            else:
-                return jsonify({
-                    "error": "Preserved input file not found",
-                    "message": f"The preserved input file for this job no longer exists: {preserved_path}",
-                    "suggestion": "This job cannot be resumed. Please delete this checkpoint and start a new translation."
-                }), 404
-        else:
-            # Fallback: try to get it from checkpoint manager
-            preserved_path_fallback = state_manager.checkpoint_manager.get_preserved_input_path(translation_id)
-            if preserved_path_fallback:
-                config['file_path'] = preserved_path_fallback
-            else:
-                return jsonify({
-                    "error": "No preserved input file",
-                    "message": "This job has no preserved input file and cannot be resumed.",
-                    "suggestion": "Please delete this checkpoint and start a new translation."
-                }), 404
-
-        # Add resume parameters to config
-        config['resume_from_index'] = checkpoint_data['resume_from_index']
-        config['is_resume'] = True
-
-        # Optional model/provider overrides for the remaining chunks (issue #183).
-        # No body = unchanged behavior.
-        overrides = request.get_json(silent=True) or {}
-        override_error = _apply_resume_overrides(config, overrides)
-        if override_error is not None:
-            return override_error
-
-        # Mark as running in database
-        state_manager.checkpoint_manager.mark_running(translation_id)
-
-        # Start the translation job (the wrapper will inject dependencies)
-        start_translation_job(translation_id, config)
-
-        return jsonify({
-            "translation_id": translation_id,
-            "message": "Translation resumed successfully",
-            "resume_from_chunk": checkpoint_data['resume_from_index'],
-            "model": config.get('model'),
-            "llm_provider": config.get('llm_provider')
-        }), 200
+        try:
+            return _start_resumed_job(
+                translation_id, checkpoint_data, state_manager,
+                start_translation_job, request)
+        except Exception:
+            state_manager.release_execution(translation_id)
+            raise
 
     @bp.route('/api/checkpoint/<translation_id>', methods=['DELETE'])
     def delete_checkpoint_endpoint(translation_id):
@@ -742,3 +707,96 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             return jsonify({"error": "Failed to delete checkpoint or checkpoint not found"}), 404
 
     return bp
+
+
+def _start_resumed_job(translation_id, checkpoint_data, state_manager,
+                       start_translation_job, request):
+    """Restore a checkpoint's job and start its worker (claim already held).
+
+    Every failure path releases the execution claim before returning, so a
+    rejected continuation never leaves the job permanently un-continuable.
+    """
+    restored = state_manager.restore_job_from_checkpoint(translation_id)
+    if not restored:
+        state_manager.release_execution(translation_id)
+        return jsonify({"error": "Failed to restore job from checkpoint"}), 500
+
+    # Get job config and add resume parameters
+    job = checkpoint_data['job']
+    config = copy.deepcopy(job['config'])  # Create a deep copy to avoid mutating the stored config
+
+    # Get preserved input file path if exists
+    # Always use preserved_input_path from config (stored during job creation)
+    # This ensures consistent file path across multiple resume cycles
+    preserved_path = config.get('preserved_input_path')
+    if preserved_path:
+        # Verify that the preserved file actually exists
+        from pathlib import Path
+        if Path(preserved_path).exists():
+            config['file_path'] = preserved_path
+        else:
+            state_manager.release_execution(translation_id)
+            return jsonify({
+                "error": "Preserved input file not found",
+                "message": f"The preserved input file for this job no longer exists: {preserved_path}",
+                "suggestion": "This job cannot be resumed. Please delete this checkpoint and start a new translation."
+            }), 404
+    else:
+        # Fallback: try to get it from checkpoint manager
+        preserved_path_fallback = state_manager.checkpoint_manager.get_preserved_input_path(translation_id)
+        if preserved_path_fallback:
+            config['file_path'] = preserved_path_fallback
+        else:
+            state_manager.release_execution(translation_id)
+            return jsonify({
+                "error": "No preserved input file",
+                "message": "This job has no preserved input file and cannot be resumed.",
+                "suggestion": "Please delete this checkpoint and start a new translation."
+            }), 404
+
+    # Add resume parameters to config
+    config['resume_from_index'] = checkpoint_data['resume_from_index']
+    config['is_resume'] = True
+
+    # Optional model/provider overrides for the remaining chunks (issue #183).
+    # No body = unchanged behavior.
+    overrides = request.get_json(silent=True) or {}
+    override_error = _apply_resume_overrides(config, overrides)
+    if override_error is not None:
+        state_manager.release_execution(translation_id)
+        return override_error
+
+    # A PDF continuation re-opens its saved recognition task instead of
+    # registering a replacement task. Report that fact so the existing task UI
+    # can label the action as a continuation.
+    continues_recognition = _continues_recognition(
+        state_manager.checkpoint_manager, translation_id, config)
+
+    # Mark as running in database
+    state_manager.checkpoint_manager.mark_running(translation_id)
+
+    # Start the translation job (the wrapper will inject dependencies)
+    start_translation_job(translation_id, config)
+
+    return jsonify({
+        "translation_id": translation_id,
+        "message": "Translation resumed successfully",
+        "resume_from_chunk": checkpoint_data['resume_from_index'],
+        "model": config.get('model'),
+        "llm_provider": config.get('llm_provider'),
+        "continues_recognition": continues_recognition,
+    }), 200
+
+
+def _continues_recognition(checkpoint_manager, translation_id, config):
+    """True when continuing this task must re-open a saved recognition record."""
+    if config.get('file_type') != 'pdf':
+        return False
+    load = getattr(checkpoint_manager, 'load_recognition_state', None)
+    if load is None:
+        return False
+    try:
+        state = load(translation_id)
+    except Exception:
+        return False
+    return bool(state is not None and state.batch_id and state.phase != 'validated')

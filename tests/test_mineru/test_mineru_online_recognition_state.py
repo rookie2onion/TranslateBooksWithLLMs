@@ -108,6 +108,16 @@ def test_state_schema_has_no_credential_or_signed_url_fields():
     assert PHASES >= {"submitted", "validated", "submission_unknown", "timed_out"}
 
 
+def test_old_state_records_still_load_with_the_new_continuation_counter():
+    payload = _state().to_dict()
+    payload.pop("continuations", None)
+
+    loaded = RecognitionState.from_dict(payload)
+
+    assert loaded.continuations == 0
+    assert loaded.attempts == 1
+
+
 def test_state_rejects_unknown_fields():
     payload = _state().to_dict()
     payload["upload_url"] = "https://bucket.aliyuncs.com/x?Signature=secret"

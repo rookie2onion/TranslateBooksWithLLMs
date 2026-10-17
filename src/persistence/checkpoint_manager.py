@@ -328,6 +328,19 @@ class CheckpointManager:
             output_filename = config.get('output_filename', 'unknown')
             job['output_filename'] = output_filename if output_filename != 'unknown' else 'unknown'
 
+            # A paused PDF job's saved recognition phase lets the existing task
+            # UI say whether Continue will re-check a known MinerU task, reuse a
+            # validated result, or report a limitation. Read from task-owned
+            # recovery data only; failures must never break the list.
+            job['recognition_phase'] = None
+            if job.get('file_type') == 'pdf':
+                try:
+                    state = self.load_recognition_state(job['translation_id'])
+                except Exception:
+                    state = None
+                if state is not None:
+                    job['recognition_phase'] = state.phase
+
         return jobs
 
     def get_job_history(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -1059,6 +1072,35 @@ class CheckpointManager:
                 print(f"Warning: Could not delete partial state: {e}")
                 return False
         return True
+
+    def archive_xhtml_partial_state(
+        self,
+        translation_id: str,
+        file_href: str,
+        reason: str = 'incompatible',
+    ) -> Optional[Path]:
+        """Move a stale/incompatible partial state aside, never overwrite it.
+
+        A resume must not silently replace work that belongs to a different
+        source, recognition result or checkpoint format. The file is preserved
+        under the job's own working data (and therefore follows the existing
+        deletion/cleanup lifecycle) and the caller reports why it was not
+        replayed.
+
+        Returns the preserved path, or None when there was no state file.
+        """
+        source = self._xhtml_state_path(translation_id, file_href)
+        if not source.exists():
+            return None
+        directory = self.uploads_dir / translation_id / "incompatible_states"
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / source.name
+        counter = 1
+        while destination.exists():
+            destination = directory / f"{source.stem}.{counter}{source.suffix}"
+            counter += 1
+        source.replace(destination)
+        return destination
 
     def list_xhtml_partial_states(self, translation_id: str) -> List[str]:
         """

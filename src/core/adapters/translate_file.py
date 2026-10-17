@@ -69,6 +69,7 @@ async def translate_file(
     stats_callback: Optional[Callable] = None,
     check_interruption_callback: Optional[Callable] = None,
     resume_from_index: int = 0,
+    is_resume: bool = False,
     llm_api_endpoint: Optional[str] = None,
     gemini_api_key: Optional[str] = None,
     openai_api_key: Optional[str] = None,
@@ -110,6 +111,9 @@ async def translate_file(
         stats_callback: Optional callback for statistics updates
         check_interruption_callback: Optional callback to check if translation should be interrupted
         resume_from_index: Index to resume from (if resuming from checkpoint)
+        is_resume: True when this run continues a previously paused job. PDF
+            uses it to refuse a hidden resubmission when the task's saved
+            recognition state is missing.
         llm_api_endpoint: LLM API endpoint URL
         gemini_api_key: Google Gemini API key (required for gemini provider)
         openai_api_key: OpenAI API key (required for openai provider)
@@ -342,6 +346,7 @@ async def translate_file(
             mineru_authorized=mineru_authorized,
             recognition_progress_callback=recognition_progress_callback,
             recognition_budget_seconds=recognition_budget_seconds,
+            is_resume=is_resume,
         )
         return result.get('success', False)
 

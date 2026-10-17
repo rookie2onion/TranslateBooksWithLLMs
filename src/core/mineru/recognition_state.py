@@ -23,8 +23,12 @@ from typing import Any, Dict, Mapping, Optional
 from .errors import MineruStateUnavailable
 
 # admitted -> submitting -> submitted -> uploaded -> recognizing -> downloading
-# -> validating -> validated. Every other value is a truthful terminal or
-# fail-closed phase for this slice.
+# -> validating -> validated. A user-requested continuation re-enters the known
+# remote task from submitted/uploaded/recognizing/downloading/validating (and
+# from the local-pause phases timed_out/interrupted_local); submitting and
+# submission_unknown are an uncertain submission and are never resubmittable.
+# admitted proves no request was issued, so it may still perform the first
+# submission. rejected/failed are terminal for this task.
 PHASES = frozenset({
     "admitted",
     "submitting",
@@ -71,6 +75,7 @@ class RecognitionState:
     result_pages: Optional[int] = None
     attempts: int = 0
     retries: int = 0
+    continuations: int = 0
     elapsed_seconds: float = 0.0
     error_code: Optional[str] = None
     error_message: Optional[str] = None
@@ -82,7 +87,8 @@ class RecognitionState:
         if not isinstance(self.source_sha256, str) or not _SHA256_RE.fullmatch(
                 self.source_sha256):
             raise ValueError("source_sha256 must be a SHA-256 hex digest")
-        for name in ("source_bytes", "source_pages", "attempts", "retries"):
+        for name in ("source_bytes", "source_pages", "attempts", "retries",
+                     "continuations"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")

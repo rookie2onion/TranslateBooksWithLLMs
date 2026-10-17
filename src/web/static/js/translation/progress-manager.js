@@ -145,6 +145,10 @@ export function resolveOperationLabel(stats) {
             case 'submitting':
             case 'uploading':
                 return t('translation:uploading_for_recognition');
+            case 'continuing':
+                // A Continue request is checking the saved MinerU task; the
+                // PDF is not being uploaded again.
+                return t('translation:continuing_recognition');
             case 'downloading':
             case 'validating':
                 return t('translation:preparing_translation');

@@ -19,6 +19,25 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from src.core.epub.xhtml_translation_state import XHTMLTranslationState
 
 
+def paragraph_mapping_sha256(paragraphs: List[str]) -> str:
+    """Stable digest of the exact source paragraph sequence.
+
+    A resume replays a translated prefix against segment indices; equal
+    paragraph *counts* do not prove that index N still holds the same source
+    text. This digest is the mapping identity written into a checkpoint and
+    compared before any stored translation is replayed.
+    """
+    import hashlib
+    import json
+
+    payload = json.dumps(
+        [str(paragraph) for paragraph in paragraphs],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
 def _utc_now_iso() -> str:
     """Timestamp in the exact format used by the XHTML checkpoint writer."""
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + 'Z'
@@ -106,6 +125,7 @@ def build_plain_checkpoint_hook(
     prompt_options: Optional[Dict[str, Any]] = None,
     bilingual: bool = False,
     original_body_html: str = "",
+    doc_identity: Optional[Dict[str, Any]] = None,
 ) -> Optional[Callable[..., None]]:
     """Build the ``checkpoint_hook`` for ``translate_paragraphs_plain``.
 
@@ -118,9 +138,24 @@ def build_plain_checkpoint_hook(
     has already been replaced by its translated rebuild (issue #285): the state
     is then the only place the source structure (block tags, attributes,
     anchored images) can be read back from.
+
+    ``doc_identity`` records which source/result the segmented translation
+    belongs to (the PDF online-recognition path supplies the source fingerprint,
+    the validated recognition-result identity and the paragraph mapping). It is
+    merged into ``doc_metadata`` so it survives the round trip and a later run
+    can refuse to replay translations against different content.
     """
     if not (checkpoint_manager and translation_id and file_href):
         return None
+
+    metadata = {
+        'plain_text_mode': True,
+        'paragraph_count': paragraph_count,
+    }
+    if doc_identity:
+        metadata.update({
+            key: value for key, value in doc_identity.items() if value is not None
+        })
 
     def _save_state(
         segments: List[Dict[str, Any]],
@@ -151,10 +186,7 @@ def build_plain_checkpoint_hook(
             translated_chunks=list(prefix),
             current_chunk_index=next_index,
             original_body_html=original_body_html or "",
-            doc_metadata={
-                'plain_text_mode': True,
-                'paragraph_count': paragraph_count,
-            },
+            doc_metadata=dict(metadata),
             stats=stats_dict,
             created_at=now,
             updated_at=now,

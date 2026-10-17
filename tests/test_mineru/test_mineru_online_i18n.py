@@ -22,6 +22,28 @@ LOCALES = ROOT / "src" / "web" / "static" / "locales"
 SUPPORTED = ["en", "fr", "es", "de", "zh-CN", "ja", "ko"]
 TEMPLATE = ROOT / "src" / "web" / "templates" / "translation_interface.html"
 MINERU_ERRORS_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "mineru-errors.js"
+PROGRESS_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "progress-manager.js"
+RESUME_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "resume-manager.js"
+TRACKER_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "translation-tracker.js"
+
+
+def test_pause_and_continue_strings_are_wired_through_the_existing_task_ui():
+    """No new API/selector: the existing progress/resume/status UI renders them."""
+    progress = PROGRESS_JS.read_text(encoding="utf-8")
+    assert "case 'continuing'" in progress
+    assert "translation:continuing_recognition" in progress
+
+    resume = RESUME_JS.read_text(encoding="utf-8")
+    assert "translation:job_card_continue_btn" in resume
+    assert "translation:pdf_continue_hint" in resume
+    assert "translation:resume_recognition_success" in resume
+    assert "translation:pdf_recognition_paused_budget" in resume
+    assert "translation:pdf_recognition_paused_stop" in resume
+
+    tracker = TRACKER_JS.read_text(encoding="utf-8")
+    assert "translation:translation_paused_msg" in tracker
+    assert "resolveMineruError(data.error_code)" in tracker
+
 
 NEW_KEYS = [
     "mineru_authorization_title",
@@ -31,6 +53,15 @@ NEW_KEYS = [
     "recognizing_online",
     "preparing_translation",
     "reusing_recognition",
+    "continuing_recognition",
+    "translation_paused_msg",
+    "job_card_continue_btn",
+    "pdf_continue_hint",
+    "resume_recognition_success",
+    "pdf_recognition_paused_budget",
+    "pdf_recognition_paused_stop",
+    "pdf_recognition_awaiting_continue",
+    "pdf_recognition_result_saved",
     "mineru_error_authorization_required",
     "mineru_error_token_missing",
     "mineru_error_pdf_unreadable",
@@ -39,6 +70,9 @@ NEW_KEYS = [
     "mineru_error_byte_limit",
     "mineru_error_state_unavailable",
     "mineru_error_continuation_unavailable",
+    "mineru_error_continuation_source_changed",
+    "mineru_error_continuation_result_unavailable",
+    "mineru_error_continuation_upload_unrecoverable",
     "mineru_error_submission_unknown",
     "mineru_error_upload_failed",
     "mineru_error_recognition_failed",

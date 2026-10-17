@@ -2,12 +2,13 @@
 Thread-safe translation state management
 """
 import atexit
+import copy
 import threading
 import time
-import copy
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 from src.persistence.checkpoint_manager import CheckpointManager
 
 if TYPE_CHECKING:
@@ -26,6 +27,12 @@ class TranslationStateManager:
     def __init__(self, checkpoint_manager: Optional[CheckpointManager] = None, server_session_id: Optional[str] = None):
         self._translations: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.RLock()  # Use RLock to allow nested locking
+        # Jobs whose worker execution is currently owned by this process. This
+        # is the atomic "one active execution per job" claim: the resume route
+        # tries to acquire it before restoring/starting a job, so two concurrent
+        # Continue requests cannot start two workers (and therefore cannot
+        # submit the same document twice). Released by the worker wrapper.
+        self._executions: set = set()
         # Generate a unique session ID for this server instance
         self.server_session_id = server_session_id or generate_server_session_id()
         self.checkpoint_manager = checkpoint_manager or CheckpointManager(
@@ -33,7 +40,7 @@ class TranslationStateManager:
         )
         self.glossary_store: Optional["GlossaryStore"] = None
         self._glossary_lock = threading.Lock()
-    
+
     def create_translation(self, translation_id: str, config: Dict[str, Any]) -> None:
         """Create a new translation entry"""
         with self._lock:
@@ -56,33 +63,59 @@ class TranslationStateManager:
                 'interrupted': False,
                 'output_filepath': None
             }
-    
+            # A freshly created job is about to be handed to its worker.
+            self._executions.add(translation_id)
+
+    def claim_execution(self, translation_id: str) -> bool:
+        """Atomically claim this job's single active worker execution.
+
+        Returns False when another execution already owns the job, so the
+        caller must not restore, start, or re-submit anything. This is the
+        existing job owner's concurrency guarantee: it needs no new queue or
+        database and survives the in-memory job record being restored.
+        """
+        with self._lock:
+            if translation_id in self._executions:
+                return False
+            self._executions.add(translation_id)
+            return True
+
+    def release_execution(self, translation_id: str) -> None:
+        """Release a claimed execution once its worker has finished."""
+        with self._lock:
+            self._executions.discard(translation_id)
+
+    def is_execution_active(self, translation_id: str) -> bool:
+        """True when a worker execution currently owns this job."""
+        with self._lock:
+            return translation_id in self._executions
+
     def update_translation(self, translation_id: str, updates: Dict[str, Any]) -> bool:
         """Update translation state safely"""
         with self._lock:
             if translation_id not in self._translations:
                 return False
-            
+
             translation = self._translations[translation_id]
-            
+
             # Handle nested updates for stats
             if 'stats' in updates and isinstance(updates['stats'], dict):
                 if 'stats' not in translation:
                     translation['stats'] = {}
                 translation['stats'].update(updates['stats'])
                 updates = {k: v for k, v in updates.items() if k != 'stats'}
-            
+
             # Handle logs append
             if 'log' in updates:
                 if 'logs' not in translation:
                     translation['logs'] = []
                 translation['logs'].append(updates['log'])
                 updates = {k: v for k, v in updates.items() if k != 'log'}
-            
+
             # Update remaining fields
             translation.update(updates)
             return True
-    
+
     def get_translation(self, translation_id: str) -> Optional[Dict[str, Any]]:
         """Get translation state safely"""
         with self._lock:
@@ -90,14 +123,14 @@ class TranslationStateManager:
                 return None
             # Return a deep copy to prevent external modification of nested objects
             return copy.deepcopy(self._translations[translation_id])
-    
+
     def get_translation_field(self, translation_id: str, field: str, default=None):
         """Get a specific field from translation state"""
         with self._lock:
             if translation_id not in self._translations:
                 return default
             return self._translations[translation_id].get(field, default)
-    
+
     def set_translation_field(self, translation_id: str, field: str, value: Any) -> bool:
         """Set a specific field in translation state"""
         with self._lock:
@@ -105,7 +138,7 @@ class TranslationStateManager:
                 return False
             self._translations[translation_id][field] = value
             return True
-    
+
     def append_log(self, translation_id: str, log_entry: str) -> bool:
         """Append a log entry to translation"""
         with self._lock:
@@ -115,7 +148,7 @@ class TranslationStateManager:
                 self._translations[translation_id]['logs'] = []
             self._translations[translation_id]['logs'].append(log_entry)
             return True
-    
+
     def update_stats(self, translation_id: str, stats_update: Dict[str, Any]) -> bool:
         """Update translation statistics"""
         with self._lock:
@@ -125,17 +158,17 @@ class TranslationStateManager:
                 self._translations[translation_id]['stats'] = {}
             self._translations[translation_id]['stats'].update(stats_update)
             return True
-    
+
     def exists(self, translation_id: str) -> bool:
         """Check if translation exists"""
         with self._lock:
             return translation_id in self._translations
-    
+
     def get_all_translations(self) -> Dict[str, Dict[str, Any]]:
         """Get all translations (returns a deep copy)"""
         with self._lock:
             return copy.deepcopy(self._translations)
-    
+
     def get_translation_summaries(self) -> list:
         """Get summaries of all translations for listing"""
         with self._lock:
@@ -164,14 +197,14 @@ class TranslationStateManager:
                     "last_translation": data.get('last_translation')
                 })
             return sorted(summaries, key=lambda x: x.get('start_time', 0), reverse=True)
-    
+
     def is_interrupted(self, translation_id: str) -> bool:
         """Check if translation is interrupted"""
         with self._lock:
             if translation_id not in self._translations:
                 return False
             return self._translations[translation_id].get('interrupted', False)
-    
+
     def set_interrupted(self, translation_id: str, interrupted: bool = True) -> bool:
         """Set interrupted flag for translation"""
         with self._lock:
@@ -235,6 +268,7 @@ class TranslationStateManager:
         with self._lock:
             if translation_id in self._translations:
                 del self._translations[translation_id]
+            self._executions.discard(translation_id)
 
         # Delete from database
         return self.checkpoint_manager.delete_checkpoint(translation_id)

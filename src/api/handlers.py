@@ -18,6 +18,7 @@ from src.core.adapters import refine_file, translate_file
 from src.core.llm import OpenRouterProvider
 from src.core.llm.exceptions import RateLimitError
 from src.core.llm_client import create_llm_client
+from src.core.mineru.errors import MineruTimeout
 from src.core.progress import snapshot_from_legacy_stats
 from src.tts.tts_config import TTSConfig
 from src.utils.custom_instructions import is_safe_filename, load_custom_instructions
@@ -435,6 +436,14 @@ def run_translation_async_wrapper(translation_id, config, state_manager, output_
             emit_update(socketio, translation_id, {'error': error_msg, 'status': 'error', 'log': f"CRITICAL WRAPPER ERROR: {error_msg}"}, state_manager)
     finally:
         loop.close()
+        # Release this job's single active-execution claim, whatever the
+        # outcome. Until this runs, a repeated Continue request is refused.
+        release = getattr(state_manager, 'release_execution', None)
+        if release is not None:
+            try:
+                release(translation_id)
+            except Exception:  # pragma: no cover - release must never fail
+                pass
 
 
 async def perform_actual_translation(translation_id, config, state_manager, output_dir, socketio):
@@ -801,6 +810,10 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 stats_callback=_translate_stats_callback,
                 check_interruption_callback=should_interrupt_current_task,
                 resume_from_index=resume_from_index,
+                # A user-requested continuation of this job: the PDF path uses
+                # it to refuse a hidden resubmission when its task-owned
+                # recognition state is missing.
+                is_resume=is_resume,
                 llm_api_endpoint=config['llm_api_endpoint'],
                 gemini_api_key=config.get('gemini_api_key', ''),
                 openai_api_key=config.get('openai_api_key', ''),
@@ -933,7 +946,32 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
 
         if state_manager.get_translation_field(translation_id, 'interrupted'):
             state_manager.set_translation_field(translation_id, 'status', 'interrupted')
-            _log_message_callback("summary_interrupted", f"🛑 Translation interrupted - partial result saved ({elapsed_time:.2f}s)")
+            # A cooperative stop can land during recognition (before any
+            # translation exists). Carry that stable code so the Web UI can say
+            # "recognition stopped locally" instead of claiming cancellation or
+            # mislabelling it as a translation error.
+            recognition_state = None
+            if config.get('file_type') == 'pdf':
+                try:
+                    recognition_state = checkpoint_manager.load_recognition_state(
+                        translation_id)
+                except Exception:  # pragma: no cover - never fail the pause
+                    recognition_state = None
+                if recognition_state is not None and recognition_state.error_code:
+                    state_manager.update_stats(
+                        translation_id, {'recognition_phase': None})
+                    state_manager.set_translation_field(
+                        translation_id, 'error_code', recognition_state.error_code)
+                    final_status_payload['error_code'] = recognition_state.error_code
+            if (recognition_state is not None
+                    and recognition_state.phase == 'interrupted_local'):
+                _log_message_callback(
+                    "pdf_recognition_stopped",
+                    "⏸️ Recognition stopped locally; the saved MinerU task can "
+                    "be continued without uploading the PDF again. The remote "
+                    "task may continue - this is not a cancellation.")
+            else:
+                _log_message_callback("summary_interrupted", f"🛑 Translation interrupted - partial result saved ({elapsed_time:.2f}s)")
             final_status_payload['status'] = 'interrupted'
             await asyncio.to_thread(notify, EVENT_INTERRUPTION,
                 _notification_context(config, translation_id, elapsed_time))
@@ -1215,6 +1253,42 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 'reason': 'rate_limited',
                 'filename': config.get('output_filename', 'unknown')
             }, namespace='/')
+
+    except MineruTimeout as e:
+        # The five-minute local recognition budget elapsed before any
+        # translation started. This is a local pause, not remote cancellation
+        # and not a provider failure: the saved recognition task is kept so the
+        # user's Continue action can re-poll it without uploading again.
+        if not state_manager.exists(translation_id):
+            return
+        _log_message_callback("pdf_recognition_paused", f"⏸️ {e}")
+        state_manager.update_stats(translation_id, {'recognition_phase': None})
+        state_manager.set_translation_field(translation_id, 'status', 'interrupted')
+        state_manager.set_translation_field(translation_id, 'error_code', e.code)
+        state_manager.set_translation_field(translation_id, 'error', str(e))
+        state_manager.set_translation_field(
+            translation_id, 'result',
+            "Recognition paused locally after the five-minute budget. The saved "
+            "MinerU task can be continued without uploading the PDF again.")
+        state_manager.get_checkpoint_manager().mark_interrupted(translation_id)
+
+        stats = state_manager.get_translation_field(translation_id, 'stats') or {}
+        elapsed_time = time.time() - stats.get('start_time', time.time())
+        _finalize_stats_callback({'elapsed_time': elapsed_time})
+
+        emit_update(socketio, translation_id, {
+            'status': 'interrupted',
+            'error': str(e),
+            'error_code': e.code,
+            'result': state_manager.get_translation_field(translation_id, 'result'),
+        }, state_manager)
+        await asyncio.to_thread(notify, EVENT_INTERRUPTION,
+            _notification_context(config, translation_id, elapsed_time))
+        socketio.emit('checkpoint_created', {
+            'translation_id': translation_id,
+            'status': 'interrupted',
+            'message': 'Recognition paused locally; the saved MinerU task can be continued',
+        }, namespace='/')
 
     except Exception as e:
         critical_error_msg = f"Critical error during translation task ({translation_id}): {str(e)}"

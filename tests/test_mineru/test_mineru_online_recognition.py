@@ -152,11 +152,16 @@ def test_a_validated_result_is_reused_without_any_provider_request(
     assert len(http.requests) == requests_before, "reuse must not contact MinerU"
 
 
-def test_an_attempted_continuation_fails_closed(tmp_path, manager, monkeypatch):
+@pytest.mark.parametrize("phase", [
+    "submitted", "uploaded", "recognizing", "downloading", "validating",
+    "timed_out", "interrupted_local",
+])
+def test_a_persisted_remote_task_is_continued_without_resubmission(
+        tmp_path, manager, monkeypatch, phase):
     source = build_source_pdf(tmp_path / "source.pdf", pages=2)
     store = TaskRecognitionStore(manager, "trans_1")
     store.save(RecognitionState(
-        phase="recognizing",
+        phase=phase,
         source_sha256=sha256_file(source),
         source_bytes=source.stat().st_size,
         source_pages=2,
@@ -166,12 +171,62 @@ def test_an_attempted_continuation_fails_closed(tmp_path, manager, monkeypatch):
     ))
     http = _http(monkeypatch, tmp_path, pages=2)
 
-    with pytest.raises(MineruContinuationUnavailable) as raised:
-        _recognize(manager, source, http=http)
+    result, _, _ = _recognize(manager, source, http=http)
 
-    assert "not" in str(raised.value).lower()
-    assert http.requests == [], "a known remote task must never be resubmitted"
-    assert store.load().phase == "recognizing"
+    assert result.continued is True
+    assert result.reused is False
+    assert result.batch_id == BATCH_ID
+    assert http.submitted_files() == [], "a known remote task must never be resubmitted"
+    # Only the result download touches storage: no upload happened again.
+    assert len(http.storage_calls()) == 1
+    state = store.load()
+    assert state.phase == "validated"
+    assert state.attempts == 0
+    assert state.continuations == 1
+
+
+def test_a_recorded_admitted_phase_performs_the_first_submission(
+        tmp_path, manager, monkeypatch):
+    """No request was ever issued, so a continuation may still submit once."""
+    source = build_source_pdf(tmp_path / "source.pdf", pages=1)
+    store = TaskRecognitionStore(manager, "trans_1")
+    store.save(RecognitionState(
+        phase="admitted",
+        source_sha256=sha256_file(source),
+        source_bytes=source.stat().st_size,
+        source_pages=1,
+        file_name=source.name,
+    ))
+    http = _http(monkeypatch, tmp_path, pages=1)
+
+    result, _, _ = _recognize(manager, source, http=http)
+
+    assert result.continued is True
+    assert len(http.submitted_files()) == 1
+    state = store.load()
+    assert state.phase == "validated"
+    assert state.attempts == 1
+    assert state.continuations == 0
+
+
+def test_admitted_continuation_still_requires_authorization(
+        tmp_path, manager, monkeypatch):
+    source = build_source_pdf(tmp_path / "source.pdf", pages=1)
+    store = TaskRecognitionStore(manager, "trans_1")
+    store.save(RecognitionState(
+        phase="admitted",
+        source_sha256=sha256_file(source),
+        source_bytes=source.stat().st_size,
+        source_pages=1,
+        file_name=source.name,
+    ))
+    http = _http(monkeypatch, tmp_path, pages=1)
+
+    with pytest.raises(MineruAuthorizationRequired):
+        _recognize(manager, source, http=http, authorized=False)
+
+    assert http.requests == []
+    assert store.load().phase == "admitted"
 
 
 def test_an_unknown_submission_outcome_is_never_replaced(tmp_path, manager, monkeypatch):
@@ -295,8 +350,36 @@ def test_a_result_that_does_not_match_the_source_is_rejected(
 
     state = TaskRecognitionStore(manager, "trans_1").load()
     assert state.phase != "validated"
+
+    # Continuing re-checks the same known task and still refuses the invalid
+    # result; it never falls back to submitting the document again.
+    with pytest.raises(MineruResultInvalid):
+        _recognize(manager, source, http=http)
+    assert len(http.submitted_files()) == 1
+    assert TaskRecognitionStore(manager, "trans_1").load().phase != "validated"
+
+
+def test_a_definite_poll_rejection_is_terminal_not_a_local_deadline(
+        tmp_path, manager, monkeypatch):
+    source = build_source_pdf(tmp_path / "source.pdf", pages=1)
+    http = _http(monkeypatch, tmp_path, pages=1)
+    from tests.test_mineru.online_fixtures import API_BASE, response
+    http.status_override = lambda index: response(
+        f"{API_BASE}/extract-results/batch/{BATCH_ID}",
+        json.dumps({"code": -60001, "msg": "task not found"}).encode("utf-8"))
+
+    with pytest.raises(MineruRequestRejected):
+        _recognize(manager, source, http=http)
+
+    state = TaskRecognitionStore(manager, "trans_1").load()
+    assert state.phase == "failed"
+    assert state.error_code == "mineru_provider_rejected"
+
+    requests_before = len(http.requests)
     with pytest.raises(MineruContinuationUnavailable):
         _recognize(manager, source, http=http)
+    assert len(http.requests) == requests_before
+    assert len(http.submitted_files()) == 1
 
 
 def test_a_transient_status_error_keeps_the_known_remote_task(

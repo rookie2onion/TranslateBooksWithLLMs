@@ -236,6 +236,21 @@ def test_poll_reports_remote_failure_with_a_sanitized_reason(monkeypatch):
     assert "Signature" not in str(raised.value)
 
 
+def test_a_possibly_accepted_submission_is_never_retried(monkeypatch):
+    """The submission request is not idempotent: a 429/5xx is not replayed."""
+    clock = FakeClock()
+    http = install_fake_http(monkeypatch, FakeMineruHttp())
+    http.submit_override = lambda: response(
+        f"{API_BASE}/file-urls/batch", b"busy", status=429)
+    client = _client(clock, max_retries=5)
+
+    with pytest.raises(MineruNetworkError):
+        client.request_upload(FILE_NAME, "data-1", deadline=_deadline(clock))
+
+    assert len(http.submitted_files()) == 1
+    assert client.retries == 0
+
+
 def test_transient_status_errors_are_retried_within_the_deadline(monkeypatch):
     clock = FakeClock()
     http = install_fake_http(monkeypatch, FakeMineruHttp())

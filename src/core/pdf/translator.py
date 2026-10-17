@@ -29,11 +29,18 @@ import src.config as _config
 from src.core.common.plain_text_checkpoint import (
     build_plain_checkpoint_hook,
     delete_plain_checkpoint,
+    is_plain_text_state,
+    paragraph_mapping_sha256,
     resume_plain_segments,
 )
 from src.core.common.plain_text_pipeline import translate_paragraphs_plain
 from src.core.mineru.admission import RECOGNITION_BUDGET_SECONDS
-from src.core.mineru.errors import MineruError, MineruInterrupted
+from src.core.mineru.errors import (
+    MineruContinuationUnavailable,
+    MineruError,
+    MineruInterrupted,
+    MineruStateUnavailable,
+)
 from src.core.mineru.recognition import RecognitionResult, recognize_pdf
 from src.core.mineru.recognition_state import TaskRecognitionStore
 from src.core.pdf.accounting import (
@@ -66,6 +73,7 @@ async def translate_pdf_file(
     mineru_token: Optional[str] = None,
     recognition_budget_seconds: float = RECOGNITION_BUDGET_SECONDS,
     recognition_progress_callback: Optional[Callable[[str], None]] = None,
+    is_resume: bool = False,
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -102,6 +110,9 @@ async def translate_pdf_file(
         mineru_token: Token override; resolved from the environment by default.
         recognition_budget_seconds: Local recognition budget (300s by default).
         recognition_progress_callback: Called with the recognition phase name.
+        is_resume: True when this run continues a previously paused job. A
+            resume that cannot find any saved recognition state fails closed
+            instead of silently uploading and submitting the PDF again.
         **kwargs: Additional arguments (ignored)
 
     Returns:
@@ -133,6 +144,16 @@ async def translate_pdf_file(
         temporary_workspace = workspace
 
     token = mineru_token if mineru_token is not None else _config.mineru_api_token()
+
+    # Safety before the trust boundary: a resume must never *start* a first
+    # online submission merely because the task-owned recognition record went
+    # missing. Without that record there is no proof the document was never
+    # submitted, so fail closed with an actionable error instead.
+    if is_resume and store is not None and store.load() is None:
+        raise MineruContinuationUnavailable(
+            "The saved recognition state for this PDF task is missing, so it "
+            "cannot be continued safely. The document was not uploaded or "
+            "submitted again; start a new task if recognition must run again.")
 
     try:
         try:
@@ -179,6 +200,25 @@ async def translate_pdf_file(
         if temporary_workspace is not None:
             shutil.rmtree(temporary_workspace, ignore_errors=True)
 
+    # Bind the segmented translation work to exactly this source document, this
+    # validated recognition result and this paragraph mapping. A saved partial
+    # state is replayed only when all three still match; equal paragraph counts
+    # are not enough, and an incompatible (legacy native-extraction) checkpoint
+    # is preserved and reported instead of being overwritten or reused.
+    checkpoint_identity = {
+        'source_sha256': outcome.admitted.sha256,
+        'result_cache_sha256': outcome.result_cache_sha256,
+        'paragraph_mapping_sha256': paragraph_mapping_sha256(content.paragraphs_text),
+    }
+    resume_state = _resume_state_for_recognized_source(
+        resume_state,
+        identity=checkpoint_identity,
+        checkpoint_manager=checkpoint_manager,
+        translation_id=translation_id,
+        file_href=file_href,
+        log_callback=log_callback,
+    )
+
     resume_segments, resume_translated = resume_plain_segments(
         resume_state, paragraph_count, log_callback
     )
@@ -194,6 +234,7 @@ async def translate_pdf_file(
         paragraph_count=paragraph_count,
         prompt_options=prompt_options,
         bilingual=bilingual,
+        doc_identity=checkpoint_identity,
     )
 
     translated, stats, was_interrupted = await translate_paragraphs_plain(
@@ -288,6 +329,88 @@ async def translate_pdf_file(
         'recognition': _recognition_summary(outcome),
         'accounting': accounting,
     }
+
+
+_PDF_CHECKPOINT_IDENTITY_KEYS = (
+    'source_sha256',
+    'result_cache_sha256',
+    'paragraph_mapping_sha256',
+)
+
+_IDENTITY_MISMATCH_MESSAGES = {
+    'incompatible': (
+        "⚠️ The saved PDF checkpoint was not written for online recognition "
+        "(legacy native-extraction work). It is preserved but not replayed; "
+        "this document starts translation from the recognized source."
+    ),
+    'source_mismatch': (
+        "⚠️ The saved PDF checkpoint belongs to a different source document. "
+        "It is preserved but not replayed against this file."
+    ),
+    'result_mismatch': (
+        "⚠️ The saved PDF checkpoint was written from a different recognition "
+        "result. It is preserved but not replayed against this result."
+    ),
+    'mapping_mismatch': (
+        "⚠️ The saved PDF checkpoint's paragraph mapping no longer matches the "
+        "recognized source. It is preserved but not replayed."
+    ),
+}
+
+
+def _resume_state_for_recognized_source(
+    resume_state: Optional[Any],
+    *,
+    identity: Dict[str, str],
+    checkpoint_manager: Optional[Any],
+    translation_id: Optional[str],
+    file_href: str,
+    log_callback: Optional[Callable],
+) -> Optional[Any]:
+    """Return the saved state only when it belongs to this exact recognized content.
+
+    Returns ``None`` (start a fresh segmented translation) for any mismatch
+    after preserving the incompatible state aside. Never raises for a mismatch;
+    only a failed preservation does, because overwriting the old work silently
+    would contradict the preservation guarantee.
+    """
+    if resume_state is None:
+        return None
+
+    metadata = getattr(resume_state, 'doc_metadata', None) or {}
+    stored = {key: metadata.get(key) for key in _PDF_CHECKPOINT_IDENTITY_KEYS}
+    reason = None
+    if (not is_plain_text_state(resume_state)
+            or not all(isinstance(value, str) and value
+                       for value in stored.values())):
+        reason = 'incompatible'
+    elif stored['source_sha256'] != identity['source_sha256']:
+        reason = 'source_mismatch'
+    elif stored['result_cache_sha256'] != identity['result_cache_sha256']:
+        reason = 'result_mismatch'
+    elif stored['paragraph_mapping_sha256'] != identity['paragraph_mapping_sha256']:
+        reason = 'mapping_mismatch'
+    if reason is None:
+        return resume_state
+
+    if checkpoint_manager is not None and translation_id:
+        archive = getattr(checkpoint_manager, 'archive_xhtml_partial_state', None)
+        if archive is not None:
+            try:
+                preserved = archive(translation_id, file_href, reason)
+            except Exception as exc:
+                raise MineruStateUnavailable(
+                    "The incompatible saved checkpoint could not be preserved, "
+                    "so the translation will not overwrite it.") from exc
+            if preserved is not None and log_callback:
+                log_callback(
+                    "pdf_checkpoint_preserved",
+                    f"🗄️ Preserved incompatible PDF checkpoint "
+                    f"('{reason}'): {getattr(preserved, 'name', preserved)}")
+    if log_callback:
+        log_callback(f'pdf_checkpoint_{reason}',
+                     _IDENTITY_MISMATCH_MESSAGES[reason])
+    return None
 
 
 def _recognition_summary(outcome: RecognitionResult) -> Dict[str, Any]:

@@ -602,8 +602,15 @@ export const TranslationTracker = {
             this.updateActiveTranslationsState();
         } else if (data.status === 'interrupted') {
             MessageLogger.resetProgressTracking();
+            // A local recognition pause/stop stays a pause: when the server
+            // carries a stable recognition code, say why it paused (budget or
+            // cooperative stop) instead of implying remote cancellation.
+            const pauseReason = resolveMineruError(data.error_code);
             this.finishCurrentFileTranslation(
-                t('translation:translation_interrupted_msg', { name: currentFile.name }),
+                pauseReason
+                    ? t('translation:translation_paused_msg', {
+                        name: currentFile.name, reason: pauseReason })
+                    : t('translation:translation_interrupted_msg', { name: currentFile.name }),
                 'info',
                 data
             );
