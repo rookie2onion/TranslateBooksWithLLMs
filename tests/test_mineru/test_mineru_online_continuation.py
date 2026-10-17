@@ -1138,6 +1138,44 @@ def test_an_incomplete_upload_is_reported_as_not_automatically_continuable(web):
 # ---------------------------------------------------------------------------
 
 
+def test_resuming_a_partial_pdf_keeps_chunk_accounting_consistent(web):
+    """A retried restored segment must not be counted as newly processed.
+
+    Regression: partial -> Continue -> completed reported ``completed_chunks``
+    one above ``total_chunks`` (log "13/12") because the restored prefix had
+    already been counted by ``resume_stats``.
+    """
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = _multi_chunk_result_zip()
+
+    upload = web.upload(source)
+    original_generate = web.llm.generate
+
+    async def failing_generate(prompt, timeout=300, system_prompt=None):
+        raise RuntimeError("simulated chunk failure")
+
+    web.llm.generate = failing_generate
+    translation_id, first = web.start_and_wait(upload)
+
+    assert first["status"] == "partial", first
+    assert first["stats"]["failed_chunks"] > 0
+    submissions = len(_submissions(web.http))
+    assert submissions == 1
+
+    web.llm.generate = original_generate
+    assert web.resume(translation_id).status_code == 200
+    second = web.wait_for_terminal(translation_id)
+
+    assert second["status"] == "completed", second
+    assert len(_submissions(web.http)) == submissions, (
+        "resuming a partial PDF must reuse the validated recognition result")
+    stats = second["stats"]
+    assert stats["total_chunks"] > 0
+    assert stats["completed_chunks"] == stats["total_chunks"], stats
+    assert stats.get("failed_chunks", 0) == 0, stats
+    assert stats.get("unfinished_chunks", 0) == 0, stats
+
+
 def test_continue_reuses_a_validated_result_instead_of_recognizing_again(web):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
     web.http.zip_bytes = _multi_chunk_result_zip()
