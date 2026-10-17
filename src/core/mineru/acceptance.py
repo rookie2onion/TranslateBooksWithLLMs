@@ -30,7 +30,9 @@ SCHEMA_VERSION = 1
 XHTML = "{http://www.w3.org/1999/xhtml}"
 OPF = "{http://www.idpf.org/2007/opf}"
 _DC = "{http://purl.org/dc/elements/1.1/}"
-_CONTENT_TYPES = tuple(sorted(KNOWN_BLOCK_TYPES - {"image"}))
+_CONTENT_TYPES = tuple(sorted(
+    KNOWN_BLOCK_TYPES - {"image", "table", "equation_interline"}))
+_PRESERVED_KINDS = {"table": "table", "equation_interline": "formula"}
 _PARAGRAPH_TAGS = {f"{XHTML}h1", f"{XHTML}h2", f"{XHTML}h3", f"{XHTML}p"}
 
 
@@ -243,9 +245,19 @@ def _check_block_coverage(cache: MineruCache, pdf: Mapping[str, Any]) -> Check:
         rows.append(f"{content_type} {represented}/{total}")
         if represented != total:
             problems.append(f"{content_type} represents {represented} of {total}")
-    images = len(pdf.get("images", []))
+    images = len([image for image in pdf.get("images", [])
+                  if image.get("kind") == "image"])
     if images != seen.get("image", 0):
         problems.append(f"images {images}/{seen.get('image', 0)}")
+    preserved = {kind: sum(1 for image in pdf.get("images", [])
+                           if image.get("kind") == kind)
+                 for kind in _PRESERVED_KINDS.values()}
+    for block_type, kind in _PRESERVED_KINDS.items():
+        total = seen.get(block_type, 0)
+        represented = preserved.get(kind, 0)
+        rows.append(f"{block_type} {represented}/{total}")
+        if represented != total:
+            problems.append(f"{block_type} represents {represented} of {total}")
     return Check("block_coverage", "Each recognised content type is represented or excluded",
                  "fail" if problems else "pass",
                  "; ".join(problems) if problems else ", ".join(rows))

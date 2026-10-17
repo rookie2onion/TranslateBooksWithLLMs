@@ -18,6 +18,7 @@ from src.core.adapters import refine_file, translate_file
 from src.core.llm import OpenRouterProvider
 from src.core.llm.exceptions import RateLimitError
 from src.core.llm_client import create_llm_client
+from src.core.pdf.accounting import read_accounting_summary
 from src.core.progress import snapshot_from_legacy_stats
 from src.tts.tts_config import TTSConfig
 from src.utils.custom_instructions import is_safe_filename, load_custom_instructions
@@ -1103,6 +1104,14 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         # Attach final stats so the completion card can render its summary
         # (cost, tokens, failed chunks…). emit_update no longer auto-attaches.
         final_status_payload['stats'] = state_manager.get_translation_field(translation_id, 'stats') or {}
+        # The durable accounting is the only place that separates deliberately
+        # source-preserved content from failed translation chunks; carry it on
+        # the completion payload so the Web summary can say so without parsing
+        # the sidecar or inventing a second counter.
+        if os.path.exists(output_filepath_on_server):
+            accounting_summary = read_accounting_summary(output_filepath_on_server)
+            if accounting_summary:
+                final_status_payload['accounting'] = accounting_summary
         emit_update(socketio, translation_id, final_status_payload, state_manager)
 
         # Trigger file list refresh in the frontend if a file was saved

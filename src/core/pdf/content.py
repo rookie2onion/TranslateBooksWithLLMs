@@ -17,12 +17,18 @@ FONT_FAMILIES = ("serif", "sans-serif", "monospace")
 
 @dataclass
 class PdfImage:
-    """An image extracted from a source PDF page."""
+    """An image extracted from a source PDF page.
+
+    ``label`` is empty for an ordinary figure. It carries the visible,
+    untranslated identification of a source-preserved table/formula image; the
+    builder renders it under the image and the translator never sees it.
+    """
 
     data: bytes          # Encoded image bytes (png or jpeg)
     ext: str             # "png" or "jpeg" only
     width_pt: float      # Displayed width on the source page, in points
     height_pt: float     # Displayed height on the source page, in points
+    label: str = ""      # Untranslated identification, or "" for a normal image
 
 
 @dataclass(frozen=True)

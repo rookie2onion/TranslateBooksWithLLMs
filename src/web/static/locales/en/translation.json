@@ -108,6 +108,7 @@
   "srt_completion_tip_block_size": "Reduce the number of subtitles per request (SRT_LINES_PER_BLOCK in your .env file, e.g. 5 instead of 10) — shorter blocks are easier to reproduce marker for marker.",
   "completion_card_dismiss": "Dismiss",
   "completion_failed_chunks": "{{count}} failed",
+  "completion_source_preserved": "{{count}} source-preserved image(s) kept untranslated",
   "completion_fallback_chunks": "{{count}} formatting fallback(s)",
   "completion_placeholder_errors": "{{count}} formatting issue(s)",
   "completion_paragraph_realigned": "{{count}} paragraph realignment(s)",
@@ -303,5 +304,6 @@
   "mineru_error_response_invalid": "MinerU returned an unexpected response. No replacement submission was made.",
   "mineru_error_provider_rejected": "MinerU rejected the recognition request. Check the configured token and the source document.",
   "mineru_error_result_invalid": "The recognition result did not match this PDF or was incomplete, so no book was produced.",
-  "mineru_error_output_invalid": "The translated PDF failed validation, so it was not published."
+  "mineru_error_output_invalid": "The translated PDF failed validation, so it was not published.",
+  "mineru_error_unsupported_content": "This PDF contains recognised content the application cannot preserve reliably yet (for example an inline formula), so no book was produced. The source PDF is unchanged."
 }

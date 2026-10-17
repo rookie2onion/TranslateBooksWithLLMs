@@ -108,6 +108,7 @@
   "srt_completion_tip_block_size": "减少每次请求的字幕数量（在 .env 文件中设置 SRT_LINES_PER_BLOCK，例如从 10 降到 5）——更短的字幕块更容易逐个标记地复现。",
   "completion_card_dismiss": "忽略",
   "completion_failed_chunks": "{{count}} 个失败",
+  "completion_source_preserved": "{{count}} 个保留的源内容图像（未翻译）",
   "completion_fallback_chunks": "{{count}} 次排版回退",
   "completion_placeholder_errors": "{{count}} 处排版瑕疵",
   "completion_paragraph_realigned": "{{count}} 次段落重新对齐",
@@ -303,5 +304,6 @@
   "mineru_error_response_invalid": "MinerU 返回了意外响应。未进行替代提交。",
   "mineru_error_provider_rejected": "MinerU 拒绝了识别请求。请检查配置的令牌和源文档。",
   "mineru_error_result_invalid": "识别结果与此 PDF 不匹配或不完整，因此未生成书籍。",
-  "mineru_error_output_invalid": "翻译后的 PDF 未通过校验，因此未发布。"
+  "mineru_error_output_invalid": "翻译后的 PDF 未通过校验，因此未发布。",
+  "mineru_error_unsupported_content": "此 PDF 含有应用暂时无法可靠保留的已识别内容（例如行内公式），因此未生成书籍。源 PDF 未被修改。"
 }

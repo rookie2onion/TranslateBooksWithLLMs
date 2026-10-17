@@ -108,6 +108,7 @@
   "srt_completion_tip_block_size": "リクエストあたりの字幕数を減らしてください（.env ファイルの SRT_LINES_PER_BLOCK、例: 10 → 5）。短いブロックほどマーカーを正確に再現しやすくなります。",
   "completion_card_dismiss": "閉じる",
   "completion_failed_chunks": "{{count}} 件失敗",
+  "completion_source_preserved": "{{count}} 件の原本画像を保持（未翻訳）",
   "completion_fallback_chunks": "書式フォールバック {{count}} 件",
   "completion_placeholder_errors": "書式の不備 {{count}} 件",
   "completion_paragraph_realigned": "段落の再整列 {{count}} 件",
@@ -303,5 +304,6 @@
   "mineru_error_response_invalid": "MinerU が予期しない応答を返しました。代替の送信は行われていません。",
   "mineru_error_provider_rejected": "MinerU が認識リクエストを拒否しました。設定されたトークンとソースドキュメントを確認してください。",
   "mineru_error_result_invalid": "認識結果がこの PDF と一致しないか不完全なため、書籍は生成されませんでした。",
-  "mineru_error_output_invalid": "翻訳された PDF は検証に失敗したため、公開されませんでした。"
+  "mineru_error_output_invalid": "翻訳された PDF は検証に失敗したため、公開されませんでした。",
+  "mineru_error_unsupported_content": "この PDF には、アプリがまだ確実に保持できない認識済みコンテンツ（インライン数式など）が含まれているため、書籍は生成されませんでした。元の PDF は変更されていません。"
 }

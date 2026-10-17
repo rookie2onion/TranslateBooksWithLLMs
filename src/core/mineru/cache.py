@@ -15,8 +15,21 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
 KNOWN_BLOCK_TYPES = frozenset(
-    {"title", "paragraph", "image", "page_header", "page_footnote", "page_number"}
+    {"title", "paragraph", "image", "table", "equation_interline",
+     "page_header", "page_footnote", "page_number"}
 )
+
+# MinerU 3.4.4 V2 contract values for a table block (the online service reported
+# `_version_name: 3.4.4`). Both are preserved as the supplied source image; the
+# HTML body is validated but never rendered, so no semantic/editable table is
+# promised.
+KNOWN_TABLE_TYPES = frozenset({"simple_table", "complex_table"})
+
+# V2 text runs are either text or an inline formula. Inline formulas have no
+# verified preservation path in this application (there is no isolated image and
+# translating LaTeX as prose is not safe), so they fail closed intentionally.
+TEXT_SPAN_TYPE = "text"
+INLINE_FORMULA_SPAN_TYPE = "equation_inline"
 
 # MinerU V2 boxes are normalised against a 1000 x 1000 square, not the page size.
 NORMALISED_SIZE = 1000.0
@@ -33,6 +46,16 @@ IMAGE_FORMATS = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg"}
 
 class MineruCacheError(ValueError):
     """The cached MinerU result cannot be used for reconstruction."""
+
+
+class MineruUnsupportedContentError(MineruCacheError):
+    """The result has a contracted shape whose preservation path is unverified.
+
+    Unknown shapes stay plain :class:`MineruCacheError` (fail closed as an
+    invalid result). This subclass is for a recognised construct that the
+    application deliberately does not claim to handle — currently an inline
+    formula run or a non-LaTeX formula variant.
+    """
 
 
 @dataclass(frozen=True)
@@ -58,6 +81,15 @@ class CachedBlock:
     image_path: Path | None = None
     image_caption: Tuple[str, ...] = ()
     image_footnote: Tuple[str, ...] = ()
+    # V2 `table` content (MinerU 3.4.4 contract; the supplied image is used).
+    table_caption: Tuple[str, ...] = ()
+    table_footnote: Tuple[str, ...] = ()
+    table_type: str = ""
+    table_nest_level: int = 0
+    # V2 `equation_interline` content: the supplied image is used, the LaTeX
+    # text is retained for provenance only.
+    math_content: str = ""
+    math_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -172,11 +204,18 @@ def _blocks(root: Path, assets: Path, v2: list, pages: Tuple[PageInfo, ...]
                 raise MineruCacheError(f"The cache exceeds {MAX_BLOCKS} recognised blocks.")
             block = _cached_block(root, assets, page_index, pages[page_index], entry,
                                   len(blocks), fingerprints)
-            total_text += len(block.text)
+            total_text += _text_length(block)
             if total_text > MAX_TOTAL_TEXT:
                 raise MineruCacheError("The cache exceeds the reconstruction text budget.")
             blocks.append(block)
     return tuple(blocks), fingerprints
+
+
+def _text_length(block: CachedBlock) -> int:
+    """Every retained text character, including captions and formula source."""
+    return (len(block.text) + len(block.math_content)
+            + sum(len(part) for part in block.table_caption)
+            + sum(len(part) for part in block.table_footnote))
 
 
 def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, entry: Any,
@@ -204,6 +243,14 @@ def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, ent
                            image_path=image_path, image_caption=caption,
                            image_footnote=footnote)
 
+    if kind == "table":
+        return _table_block(root, assets, page_index, index, bbox, content,
+                            where, fingerprints)
+
+    if kind == "equation_interline":
+        return _equation_block(root, assets, page_index, index, bbox, content,
+                               where, fingerprints)
+
     key = {"title": "title_content", "paragraph": "paragraph_content",
            "page_footnote": "page_footnote_content",
            "page_header": "page_header_content",
@@ -216,6 +263,75 @@ def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, ent
                        level=level)
 
 
+def _table_block(root: Path, assets: Path, page_index: int, index: int,
+                 bbox: Tuple[float, float, float, float], content: Mapping[str, Any],
+                 where: str, fingerprints: Dict[str, str]) -> CachedBlock:
+    """Validate one contracted ``table`` block and keep its supplied source image."""
+    where = f"{where} table"
+    _require_non_empty_bounds(bbox, where)
+    source = content.get("image_source")
+    if not isinstance(source, dict):
+        raise MineruCacheError(f"{where} has no image_source object.")
+    image_path = _image_path(root, assets, source.get("path"), where, fingerprints)
+    caption = _runs(content.get("table_caption"), f"{where} table_caption")
+    footnote = _runs(content.get("table_footnote"), f"{where} table_footnote")
+    # The HTML body is part of the verified contract but is never rendered:
+    # source-image preservation does not promise an editable/semantic table.
+    _clip(_require_string(content, "html", where), where)
+    table_type = content.get("table_type")
+    if table_type not in KNOWN_TABLE_TYPES:
+        raise MineruCacheError(f"{where} has an unsupported table_type {table_type!r}.")
+    nest_level = content.get("table_nest_level")
+    if (not isinstance(nest_level, int) or isinstance(nest_level, bool)
+            or nest_level < 1):
+        raise MineruCacheError(
+            f"{where} has an invalid table_nest_level {nest_level!r}.")
+    return CachedBlock(index=index, page_index=page_index, type="table", bbox=bbox,
+                       image_path=image_path, table_caption=caption,
+                       table_footnote=footnote, table_type=table_type,
+                       table_nest_level=nest_level)
+
+
+def _equation_block(root: Path, assets: Path, page_index: int, index: int,
+                    bbox: Tuple[float, float, float, float],
+                    content: Mapping[str, Any], where: str,
+                    fingerprints: Dict[str, str]) -> CachedBlock:
+    """Validate one contracted ``equation_interline`` block."""
+    where = f"{where} formula"
+    _require_non_empty_bounds(bbox, where)
+    source = content.get("image_source")
+    if not isinstance(source, dict):
+        raise MineruCacheError(f"{where} has no image_source object.")
+    image_path = _image_path(root, assets, source.get("path"), where, fingerprints)
+    math_content = _clip(_require_string(content, "math_content", where), where)
+    math_type = content.get("math_type")
+    if math_type != "latex":
+        raise MineruUnsupportedContentError(
+            f"{where} has an unverified math_type {math_type!r}; only the "
+            f"contracted 'latex' representation is preserved.")
+    return CachedBlock(index=index, page_index=page_index,
+                       type="equation_interline", bbox=bbox,
+                       image_path=image_path, math_content=math_content,
+                       math_type=math_type)
+
+
+def _require_string(content: Mapping[str, Any], key: str, where: str) -> str:
+    value = content.get(key)
+    if not isinstance(value, str):
+        raise MineruCacheError(f"{where} has no {key} string.")
+    return value
+
+
+def _require_non_empty_bounds(bbox: Tuple[float, float, float, float],
+                              where: str) -> None:
+    """A preserved source image must have finite, non-empty page geometry."""
+    x0, y0, x1, y1 = bbox
+    if not all(math.isfinite(value) for value in bbox) or x1 <= x0 or y1 <= y0:
+        raise MineruCacheError(
+            f"{where} has empty bounds {bbox!r}; a source image cannot be "
+            f"placed without finite, non-empty geometry.")
+
+
 def _runs(value: Any, where: str) -> Tuple[str, ...]:
     if value is None:
         return ()
@@ -223,7 +339,19 @@ def _runs(value: Any, where: str) -> Tuple[str, ...]:
         raise MineruCacheError(f"{where} is not a list of text runs.")
     parts = []
     for run in value:
-        if not isinstance(run, dict) or not isinstance(run.get("content"), str):
+        if not isinstance(run, dict):
+            raise MineruCacheError(f"{where} contains a run that is not an object.")
+        span_type = run.get("type")
+        if span_type == INLINE_FORMULA_SPAN_TYPE:
+            raise MineruUnsupportedContentError(
+                f"{where} contains an inline formula (equation_inline) run. "
+                f"Inline formula preservation is not verified in this "
+                f"application, and discarding the run silently would be "
+                f"dishonest; the document is refused instead.")
+        if span_type != TEXT_SPAN_TYPE:
+            raise MineruCacheError(
+                f"{where} contains unsupported span type {span_type!r}.")
+        if not isinstance(run.get("content"), str):
             raise MineruCacheError(f"{where} contains a text run without string content.")
         parts.append(run["content"])
     return tuple(parts)

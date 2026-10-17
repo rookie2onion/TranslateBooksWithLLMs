@@ -138,6 +138,17 @@ class MineruResultInvalid(MineruError):
     code = "mineru_result_invalid"
 
 
+class MineruUnsupportedContent(MineruResultInvalid):
+    """The result contains a recognised construct this release cannot preserve.
+
+    Inline formulas and non-LaTeX formula variants are the current examples:
+    their representation has no verified preservation path here, so the
+    document is refused explicitly instead of silently dropping the content.
+    """
+
+    code = "mineru_unsupported_content"
+
+
 class MineruOutputInvalid(MineruError):
     """The generated translated PDF failed its validation."""
 

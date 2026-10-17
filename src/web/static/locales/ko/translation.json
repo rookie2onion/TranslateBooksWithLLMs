@@ -108,6 +108,7 @@
   "srt_completion_tip_block_size": "요청당 자막 수를 줄이세요(.env 파일의 SRT_LINES_PER_BLOCK, 예: 10 대신 5). 블록이 짧을수록 마커를 하나하나 재현하기 쉽습니다.",
   "completion_card_dismiss": "닫기",
   "completion_failed_chunks": "{{count}}개 실패",
+  "completion_source_preserved": "{{count}}개의 원본 보존 이미지(번역되지 않음)",
   "completion_fallback_chunks": "서식 폴백 {{count}}건",
   "completion_placeholder_errors": "서식 미흡 {{count}}건",
   "completion_paragraph_realigned": "단락 재정렬 {{count}}건",
@@ -303,5 +304,6 @@
   "mineru_error_response_invalid": "MinerU가 예상치 못한 응답을 반환했습니다. 대체 제출은 수행되지 않았습니다.",
   "mineru_error_provider_rejected": "MinerU가 인식 요청을 거부했습니다. 구성된 토큰과 원본 문서를 확인하세요.",
   "mineru_error_result_invalid": "인식 결과가 이 PDF와 일치하지 않거나 불완전하여 책이 생성되지 않았습니다.",
-  "mineru_error_output_invalid": "번역된 PDF가 검증을 통과하지 못해 게시되지 않았습니다."
+  "mineru_error_output_invalid": "번역된 PDF가 검증을 통과하지 못해 게시되지 않았습니다.",
+  "mineru_error_unsupported_content": "이 PDF에는 앱이 아직 안정적으로 보존할 수 없는 인식된 콘텐츠(예: 인라인 수식)가 있어 책이 생성되지 않았습니다. 원본 PDF는 변경되지 않았습니다."
 }

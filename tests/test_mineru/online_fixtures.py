@@ -105,9 +105,10 @@ def build_corrupt_pdf(path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _png_bytes(width: int = 60, height: int = 40) -> bytes:
+def _png_bytes(width: int = 60, height: int = 40,
+               color: tuple[int, int, int] = (20, 120, 40)) -> bytes:
     buffer = io.BytesIO()
-    Image.new("RGB", (width, height), (20, 120, 40)).save(buffer, format="PNG")
+    Image.new("RGB", (width, height), color).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -120,12 +121,18 @@ def _points(bbox: List[float]) -> List[float]:
     ]
 
 
+def _is_local_asset_path(path: str) -> bool:
+    """True for a simple cache-relative asset path (test fixture safety)."""
+    return bool(path) and not path.startswith("/") and ".." not in path.split("/")
+
+
 def title_block(text: str, bbox: List[float], level: int = 1) -> Dict[str, Any]:
     return {"type": "title", "level": level, "text": text, "bbox": bbox}
 
 
-def paragraph_block(text: str, bbox: List[float]) -> Dict[str, Any]:
-    return {"type": "paragraph", "text": text, "bbox": bbox}
+def paragraph_block(text: str, bbox: List[float], *,
+                    spans: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    return {"type": "paragraph", "text": text, "bbox": bbox, "spans": spans}
 
 
 def image_block(path: str, bbox: List[float], *, caption: str = "",
@@ -137,6 +144,33 @@ def image_block(path: str, bbox: List[float], *, caption: str = "",
         "caption": [{"type": "text", "content": caption}] if caption else [],
         "footnote": [{"type": "text", "content": footnote}] if footnote else [],
         "text": content,
+    }
+
+
+def table_block(path: str, bbox: List[float], *, caption: str = "",
+                footnote: str = "",
+                html: str = "<table><tr><td>Cell</td></tr></table>",
+                table_type: str = "simple_table", nest_level: int = 1,
+                color: tuple[int, int, int] = (30, 90, 200),
+                asset: Optional[bytes] = None) -> Dict[str, Any]:
+    """A scripted ``table`` V2 block, matching the MinerU 3.4.4 contract."""
+    return {
+        "type": "table", "path": path, "bbox": bbox,
+        "caption": [{"type": "text", "content": caption}] if caption else [],
+        "footnote": [{"type": "text", "content": footnote}] if footnote else [],
+        "html": html, "table_type": table_type, "nest_level": nest_level,
+        "color": color, "asset": asset,
+    }
+
+
+def equation_block(path: str, bbox: List[float], *, math: str = "E = mc^2",
+                   math_type: str = "latex",
+                   color: tuple[int, int, int] = (200, 40, 40),
+                   asset: Optional[bytes] = None) -> Dict[str, Any]:
+    """A scripted ``equation_interline`` V2 block (MinerU 3.4.4 contract)."""
+    return {
+        "type": "equation_interline", "path": path, "bbox": bbox,
+        "math": math, "math_type": math_type, "color": color, "asset": asset,
     }
 
 
@@ -186,7 +220,8 @@ def _v2_block(spec: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "type": "paragraph",
             "bbox": bbox,
-            "content": {"paragraph_content": [{"type": "text", "content": spec["text"]}]},
+            "content": {"paragraph_content": spec.get("spans") or [
+                {"type": "text", "content": spec["text"]}]},
         }
     if kind == "image":
         return {
@@ -197,6 +232,29 @@ def _v2_block(spec: Dict[str, Any]) -> Dict[str, Any]:
                 "content": spec.get("text", ""),
                 "image_caption": spec.get("caption", []),
                 "image_footnote": spec.get("footnote", []),
+            },
+        }
+    if kind == "table":
+        return {
+            "type": "table",
+            "bbox": bbox,
+            "content": {
+                "image_source": {"path": spec["path"]},
+                "table_caption": spec.get("caption", []),
+                "table_footnote": spec.get("footnote", []),
+                "html": spec["html"],
+                "table_type": spec["table_type"],
+                "table_nest_level": spec["nest_level"],
+            },
+        }
+    if kind == "equation_interline":
+        return {
+            "type": "equation_interline",
+            "bbox": bbox,
+            "content": {
+                "math_content": spec["math"],
+                "math_type": spec["math_type"],
+                "image_source": {"path": spec["path"]},
             },
         }
     key = {
@@ -215,6 +273,12 @@ def _layout_block(spec: Dict[str, Any], index: int) -> Dict[str, Any]:
     points = _points(spec["bbox"])
     if spec["type"] == "image":
         return {"type": "image", "bbox": points, "index": index, "lines": []}
+    if spec["type"] == "table":
+        return {"type": "table", "bbox": points, "index": index,
+                "blocks": [{"type": "table_body", "bbox": points, "lines": []}]}
+    if spec["type"] == "equation_interline":
+        return {"type": "interline_equation", "bbox": points, "index": index,
+                "lines": []}
     block: Dict[str, Any] = {
         "type": "title" if spec["type"] == "title" else "text",
         "bbox": points,
@@ -245,6 +309,7 @@ def result_zip_bytes(
     pages = pages if pages is not None else default_result_pages(page_count)
     recognised = page_count if layout_page_count is None else layout_page_count
 
+    visual_types = ("title", "paragraph", "image", "table", "equation_interline")
     layout_pages = []
     for index in range(recognised):
         blocks = pages[index] if index < len(pages) else []
@@ -253,11 +318,11 @@ def result_zip_bytes(
             "page_size": [PAGE_WIDTH, PAGE_HEIGHT],
             "preproc_blocks": [
                 _layout_block(spec, position) for position, spec in enumerate(blocks)
-                if spec["type"] in ("title", "paragraph", "image")
+                if spec["type"] in visual_types
             ],
             "discarded_blocks": [
                 _layout_block(spec, position) for position, spec in enumerate(blocks)
-                if spec["type"] not in ("title", "paragraph", "image")
+                if spec["type"] not in visual_types
             ],
         })
     layout = {
@@ -275,7 +340,26 @@ def result_zip_bytes(
             "sample_content_list_v2.json",
             json.dumps(v2, ensure_ascii=False, indent=2),
         )
-        archive.writestr("images/fig1.png", _png_bytes())
+        assets = {"images/fig1.png": _png_bytes()}
+        for page in pages[:recognised]:
+            for spec in page:
+                path = str(spec.get("path") or "")
+                if not _is_local_asset_path(path):
+                    # An escaping path belongs in the JSON payload: the archive
+                    # extraction guard is a separate safety layer under test.
+                    continue
+                if spec["type"] in ("table", "equation_interline"):
+                    assets.setdefault(
+                        path,
+                        spec.get("asset") or _png_bytes(
+                            80, 60, spec.get("color", (30, 90, 200))))
+                elif spec["type"] == "image" and path != "images/fig1.png":
+                    assets.setdefault(
+                        path,
+                        spec.get("asset") or _png_bytes(
+                            60, 40, spec.get("color", (20, 120, 40))))
+        for name, data in assets.items():
+            archive.writestr(name, data)
         for name, data in (extra_members or {}).items():
             archive.writestr(name, data)
         if symlink_member:

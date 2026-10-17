@@ -22,6 +22,8 @@ LOCALES = ROOT / "src" / "web" / "static" / "locales"
 SUPPORTED = ["en", "fr", "es", "de", "zh-CN", "ja", "ko"]
 TEMPLATE = ROOT / "src" / "web" / "templates" / "translation_interface.html"
 MINERU_ERRORS_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "mineru-errors.js"
+TRANSLATION_TRACKER_JS = (
+    ROOT / "src" / "web" / "static" / "js" / "translation" / "translation-tracker.js")
 
 NEW_KEYS = [
     "mineru_authorization_title",
@@ -48,7 +50,9 @@ NEW_KEYS = [
     "mineru_error_response_invalid",
     "mineru_error_provider_rejected",
     "mineru_error_result_invalid",
+    "mineru_error_unsupported_content",
     "mineru_error_output_invalid",
+    "completion_source_preserved",
 ]
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
@@ -116,3 +120,14 @@ def test_page_and_byte_limit_messages_keep_their_placeholder():
         translations = _load(locale)
         assert PLACEHOLDER_RE.findall(translations["mineru_error_page_limit"]) == ["max"]
         assert PLACEHOLDER_RE.findall(translations["mineru_error_byte_limit"]) == ["max"]
+
+
+def test_the_source_preserved_summary_is_rendered_reactively():
+    source = TRANSLATION_TRACKER_JS.read_text(encoding="utf-8")
+    # The chip is driven by the durable accounting, never by an invented
+    # client-side counter mixed with failed chunks.
+    assert "resultData.accounting" in source
+    assert "completion_source_preserved" in source
+    # Same completion card, same localeChanged re-render path as the other
+    # stats: the string follows a language switch with no page reload.
+    assert "localeChanged" in source

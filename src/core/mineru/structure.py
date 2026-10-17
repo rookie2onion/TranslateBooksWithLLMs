@@ -34,10 +34,23 @@ _TERMINAL_PUNCTUATION = (".", "!", "?")
 _NOTICE_KIND = "notice"
 _HEADING_STYLES = {1: "heading1", 2: "heading2"}
 
+# Visible, untranslated identification for each source-preserved block. The
+# label is rendered by the PDF builder, never passed through the translator.
+PRESERVED_LABELS = {
+    "table": "Source-preserved table (untranslated)",
+    "formula": "Source-preserved formula (untranslated)",
+}
+
 
 @dataclass(frozen=True)
 class ImageAsset:
-    """A recognised figure with its bytes and source-page placement."""
+    """An anchored visual: a figure, or a source-preserved table/formula image.
+
+    ``kind`` is ``"image"`` for a recognised figure and ``"table"`` /
+    ``"formula"`` for content retained in its source form because a semantic
+    translation is not promised. Source-preserved assets are never translated;
+    :attr:`label` is how the rendition says so.
+    """
 
     path: Path
     sample_page: int
@@ -48,10 +61,17 @@ class ImageAsset:
     width_pt: float
     height_pt: float
     sha256: str
+    kind: str = "image"
+
+    @property
+    def label(self) -> str:
+        """Visible untranslated marker, empty for an ordinary figure."""
+        return PRESERVED_LABELS.get(self.kind, "")
 
     def to_pdf_image(self) -> PdfImage:
         return PdfImage(data=self.data, ext=self.ext,
-                        width_pt=self.width_pt, height_pt=self.height_pt)
+                        width_pt=self.width_pt, height_pt=self.height_pt,
+                        label=self.label)
 
 
 @dataclass(frozen=True)
@@ -290,6 +310,34 @@ def adapt(cache: MineruCache) -> SourceContent:
                             "the figure.",
                     sample_page=block.page_index, block_index=block.index))
 
+        elif block.type == "table":
+            asset = _preserved_asset(block, page, "table")
+            anchor = len(paragraphs) - 1
+            images.setdefault(anchor, []).append(asset)
+            accounted.add(block.index)
+            provenance.append(_preserved_provenance(
+                block, page, kind="table", asset=asset, anchor=anchor,
+                text=_sha256_text(""), root=cache.root))
+            caption = " ".join(part.strip() for part in block.table_caption
+                               if part.strip())
+            if caption:
+                emit(caption, "caption", "normal", ParagraphFormat(italic=True),
+                     block, source_type="table_caption")
+            credit = " ".join(part.strip() for part in block.table_footnote
+                              if part.strip())
+            if credit:
+                emit(credit, "footnote", "normal", ParagraphFormat(italic=True),
+                     block, source_type="table_footnote")
+
+        elif block.type == "equation_interline":
+            asset = _preserved_asset(block, page, "formula")
+            anchor = len(paragraphs) - 1
+            images.setdefault(anchor, []).append(asset)
+            accounted.add(block.index)
+            provenance.append(_preserved_provenance(
+                block, page, kind="formula", asset=asset, anchor=anchor,
+                text=_sha256_text(block.math_content), root=cache.root))
+
         elif block.type == "page_footnote":
             if not text:
                 exclude(block, "empty_record",
@@ -318,12 +366,18 @@ def adapt(cache: MineruCache) -> SourceContent:
             message="This recognised block reached neither output nor an exclusion.",
             sample_page=block.page_index, block_index=block.index, severity="review"))
 
+    all_assets = [asset for assets in images.values() for asset in assets]
     counts = {
         "blocks_seen": len(cache.blocks),
         "blocks_accounted": len(accounted),
         "blocks_unaccounted": len(unaccounted),
         "paragraphs": len(paragraphs),
-        "images": sum(len(assets) for assets in images.values()),
+        # Ordinary figures only: source-preserved table/formula images are
+        # counted on their own so the accounting never conflates them.
+        "images": sum(1 for asset in all_assets if asset.kind == "image"),
+        "source_preserved": sum(1 for asset in all_assets if asset.kind != "image"),
+        "tables": sum(1 for asset in all_assets if asset.kind == "table"),
+        "formulas": sum(1 for asset in all_assets if asset.kind == "formula"),
         "excluded": len(exclusions),
         "empty_records": sum(1 for item in exclusions if item.kind == "empty_record"),
         "findings": len(findings),
@@ -450,6 +504,42 @@ def _image_asset(block: CachedBlock, page: PageInfo, root: Path) -> ImageAsset:
         width_pt=x1 - x0,
         height_pt=y1 - y0,
         sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
+def _preserved_asset(block: CachedBlock, page: PageInfo, kind: str) -> ImageAsset:
+    """A table/formula retained as the provider's supplied source image."""
+    assert block.image_path is not None
+    x0, y0, x1, y1 = block.bbox
+    data = block.image_path.read_bytes()
+    return ImageAsset(
+        path=block.image_path,
+        sample_page=block.page_index,
+        source_page=page.source_page,
+        bbox=block.bbox,
+        data=data,
+        ext=IMAGE_FORMATS[block.image_path.suffix.lower()],
+        width_pt=x1 - x0,
+        height_pt=y1 - y0,
+        sha256=hashlib.sha256(data).hexdigest(),
+        kind=kind,
+    )
+
+
+def _preserved_provenance(block: CachedBlock, page: PageInfo, *, kind: str,
+                          asset: ImageAsset, anchor: int, text: str,
+                          root: Path) -> Provenance:
+    assert block.image_path is not None
+    return Provenance(
+        kind=kind,
+        source_type=block.type,
+        sample_page=block.page_index,
+        source_page=page.source_page,
+        bbox=block.bbox,
+        text_sha256=text,
+        anchor_index=anchor,
+        image_path=block.image_path.relative_to(root).as_posix(),
+        image_sha256=asset.sha256,
     )
 
 

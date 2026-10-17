@@ -29,6 +29,7 @@ const KNOWN_CODES = new Set([
     'mineru_response_invalid',
     'mineru_provider_rejected',
     'mineru_result_invalid',
+    'mineru_unsupported_content',
     'mineru_output_invalid',
 ]);
 

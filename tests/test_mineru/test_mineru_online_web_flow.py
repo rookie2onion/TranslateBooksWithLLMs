@@ -338,7 +338,7 @@ def test_an_incomplete_recognition_result_is_not_published(web):
 
 def test_unsupported_content_fails_explicitly_instead_of_being_omitted(web):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
-    pages = [[{"type": "table", "text": "a table", "bbox": [10, 10, 500, 500]}]]
+    pages = [[{"type": "chart", "text": "a chart", "bbox": [10, 10, 500, 500]}]]
     web.http.zip_bytes = result_zip_bytes(page_count=1, pages=pages)
 
     upload = _upload(web, source)
@@ -347,7 +347,7 @@ def test_unsupported_content_fails_explicitly_instead_of_being_omitted(web):
 
     assert status["status"] == "error"
     assert status["error_code"] == "mineru_result_invalid"
-    assert "table" in (status["error"] or "").lower()
+    assert "chart" in (status["error"] or "").lower()
     assert _download(web, "unsupported.pdf").status_code == 404
 
 
