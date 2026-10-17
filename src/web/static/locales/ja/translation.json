@@ -290,6 +290,7 @@
   "mineru_authorization_required": "開始する前に、PDF を MinerU へ送信することを承認してください。",
   "uploading_for_recognition": "オンライン認識のためにアップロード中…",
   "recognizing_online": "MinerU で認識中…",
+  "generating_output": "翻訳済み PDF を生成しています…",
   "preparing_translation": "翻訳を準備中…",
   "reusing_recognition": "検証済みの認識結果を再利用中…",
   "continuing_recognition": "保存された MinerU タスクを確認中…",

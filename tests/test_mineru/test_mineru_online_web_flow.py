@@ -513,6 +513,43 @@ def test_pdf_completion_payload_is_emitted_before_the_terminal_status(web):
         "a poller could observe a completed job before its payload")
 
 
+def test_pdf_reports_a_distinct_output_generation_phase(web):
+    """US10: recognition, translation and output generation are distinguishable.
+
+    The build+validation step is observable through the same stats payload the
+    progress UI already renders, and 'completed' is only published after the
+    validated output and its accounting exist.
+    """
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+
+    upload = _upload(web, source)
+    phases = []
+    completion_payload = {}
+
+    def on_emit(event, data, namespace):
+        if event != "translation_update" or not isinstance(data, dict):
+            return
+        phase = (data.get("stats") or {}).get("recognition_phase")
+        if phase:
+            phases.append(phase)
+        if data.get("status") == "completed":
+            completion_payload.update(data)
+
+    web.socket.on_emit = on_emit
+    response = _start(web, upload, output_filename="phases (French).pdf")
+    status = _wait_for_terminal(web, response.get_json()["translation_id"])
+
+    assert status["status"] == "completed", status
+    assert "output_generation" in phases, (
+        f"no separate output-generation phase was observable: {phases}")
+    assert phases.index("output_generation") > phases.index("recognizing")
+    assert phases.index("output_generation") > phases.index("validating")
+    # The terminal payload is emitted only once the validated book (and its
+    # accounting) exists, never before.
+    assert completion_payload.get("accounting", {}).get("body_complete") is True
+
+
 def test_non_pdf_workflow_is_unchanged(web):
     text_file = web.tmp_path / "story.txt"
     text_file.write_text("Once upon a time.\n\nA second paragraph.\n", encoding="utf-8")

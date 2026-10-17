@@ -54,6 +54,7 @@ NEW_KEYS = [
     "mineru_authorization_required",
     "uploading_for_recognition",
     "recognizing_online",
+    "generating_output",
     "preparing_translation",
     "reusing_recognition",
     "continuing_recognition",
@@ -144,6 +145,12 @@ def test_checkpoint_paused_message_keeps_the_name_token(locale, key):
     translated = set(PLACEHOLDER_RE.findall(_load_common(locale)[key]))
     assert reference == {"name"}
     assert translated == reference, f"{locale}: {key} tokens differ"
+
+
+def test_the_output_generation_phase_has_a_localized_progress_label():
+    progress = PROGRESS_JS.read_text(encoding="utf-8")
+    assert "case 'output_generation':" in progress
+    assert "translation:generating_output" in progress
 
 
 def test_checkpoint_message_is_resolved_at_render_time_not_server_side():

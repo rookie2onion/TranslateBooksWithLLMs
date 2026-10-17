@@ -290,6 +290,7 @@
   "mineru_authorization_required": "开始前请授权将此 PDF 发送到 MinerU。",
   "uploading_for_recognition": "正在上传以进行在线识别…",
   "recognizing_online": "正在使用 MinerU 识别…",
+  "generating_output": "正在生成翻译后的 PDF…",
   "preparing_translation": "正在准备翻译…",
   "reusing_recognition": "正在复用已验证的识别结果…",
   "continuing_recognition": "正在检查已保存的 MinerU 任务…",

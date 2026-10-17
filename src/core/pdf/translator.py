@@ -291,9 +291,11 @@ async def translate_pdf_file(
 
     # Build next to the destination, validate, then publish atomically: a
     # partially written or preview-stamped file must never become the task's
-    # downloadable output.
+    # downloadable output. The build/validation step is its own observable
+    # phase so the UI can distinguish it from recognition and translation.
     destination = Path(output_filepath)
     temporary_output = Path(str(destination) + ".part")
+    _notify_output_progress(recognition_progress_callback, 'output_generation')
     try:
         build_pdf(
             translated,
@@ -323,6 +325,7 @@ async def translate_pdf_file(
         except OSError:  # pragma: no cover - best-effort cleanup
             pass
         raise
+    _notify_output_progress(recognition_progress_callback, 'validated')
 
     accounting = build_accounting(
         recognition=outcome,
@@ -480,3 +483,14 @@ def _recognition_summary(outcome: RecognitionResult) -> Dict[str, Any]:
         'result_cache_sha256': outcome.result_cache_sha256,
         'elapsed_seconds': round(outcome.elapsed_seconds, 3),
     }
+
+
+def _notify_output_progress(callback: Optional[Callable[[str], None]],
+                            phase: str) -> None:
+    """Best-effort phase notification; progress must never fail a job."""
+    if callback is None:
+        return
+    try:
+        callback(phase)
+    except Exception:  # pragma: no cover - progress is advisory
+        pass

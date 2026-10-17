@@ -290,6 +290,7 @@
   "mineru_authorization_required": "Authorize sending the PDF to MinerU before starting.",
   "uploading_for_recognition": "Uploading for online recognition…",
   "recognizing_online": "Recognizing with MinerU…",
+  "generating_output": "Generating the translated PDF…",
   "preparing_translation": "Preparing the translation…",
   "reusing_recognition": "Reusing the validated recognition…",
   "continuing_recognition": "Checking the saved MinerU task…",
