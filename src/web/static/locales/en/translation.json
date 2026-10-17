@@ -288,6 +288,7 @@
   "mineru_authorization_title": "Send this task's PDF to MinerU online recognition",
   "mineru_authorization_description": "The PDF is uploaded to MinerU, a third-party service, and recognized with the account configured on this server. Text and images are recognized online; there is no local extraction fallback.",
   "mineru_authorization_required": "Authorize sending the PDF to MinerU before starting.",
+  "mineru_task_authorization": "Send this PDF to MinerU",
   "uploading_for_recognition": "Uploading for online recognition…",
   "recognizing_online": "Recognizing with MinerU…",
   "generating_output": "Generating the translated PDF…",

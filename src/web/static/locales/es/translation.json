@@ -288,6 +288,7 @@
   "mineru_authorization_title": "Enviar el PDF de esta tarea al reconocimiento en línea de MinerU",
   "mineru_authorization_description": "El PDF se sube a MinerU, un servicio de terceros, y se reconoce con la cuenta configurada en este servidor. El texto y las imágenes se reconocen en línea; no hay extracción local de respaldo.",
   "mineru_authorization_required": "Autoriza el envío del PDF a MinerU antes de empezar.",
+  "mineru_task_authorization": "Enviar este PDF a MinerU",
   "uploading_for_recognition": "Subiendo para el reconocimiento en línea…",
   "recognizing_online": "Reconociendo con MinerU…",
   "generating_output": "Generando el PDF traducido…",

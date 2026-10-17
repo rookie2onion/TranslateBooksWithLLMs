@@ -496,20 +496,16 @@
                     <ul id="fileListContainer"></ul>
                 </div>
 
-                <!-- Brief, task-specific authorization for sending PDFs to
-                     MinerU. Hidden unless a PDF is queued and cleared after
-                     every started batch, so selecting a file never grants
-                     upload permission and a previous run never grants the
-                     next one. -->
+                <!-- Brief disclosure for sending PDFs to MinerU. The actual
+                     consent is per task: every queued PDF carries its own
+                     checkbox in the file list. Selecting or uploading a file
+                     never grants it, and starting a task consumes its tick. -->
                 <div id="mineruAuthorization" class="option-item mineru-authorization"
                      style="max-width: 720px; margin: 0 auto 18px auto; text-align: left;" hidden>
-                    <label class="option-item__label" for="mineruPdfConsent">
-                        <input type="checkbox" id="mineruPdfConsent">
-                        <div>
-                            <span class="option-item__title" data-i18n="translation:mineru_authorization_title">Send this task's PDF to MinerU online recognition</span>
-                            <p class="option-item__description" data-i18n="translation:mineru_authorization_description">The PDF is uploaded to MinerU, a third-party service, and recognized with the account configured on this server. Text and images are recognized online; there is no local extraction fallback.</p>
-                        </div>
-                    </label>
+                    <div>
+                        <span class="option-item__title" data-i18n="translation:mineru_authorization_title">Send this task's PDF to MinerU online recognition</span>
+                        <p class="option-item__description" data-i18n="translation:mineru_authorization_description">The PDF is uploaded to MinerU, a third-party service, and recognized with the account configured on this server. Text and images are recognized online; there is no local extraction fallback.</p>
+                    </div>
                 </div>
 
                 <!-- Action Buttons -->

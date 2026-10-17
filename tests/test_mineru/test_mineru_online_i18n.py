@@ -29,6 +29,10 @@ TRANSLATION_TRACKER_JS = (
 WEBSOCKET_MANAGER_JS = (
     ROOT / "src" / "web" / "static" / "js" / "core" / "websocket-manager.js")
 HANDLERS_PY = ROOT / "src" / "api" / "handlers.py"
+FILE_UPLOAD_JS = (
+    ROOT / "src" / "web" / "static" / "js" / "files" / "file-upload.js")
+BATCH_CONTROLLER_JS = (
+    ROOT / "src" / "web" / "static" / "js" / "translation" / "batch-controller.js")
 
 
 def test_pause_and_continue_strings_are_wired_through_the_existing_task_ui():
@@ -52,6 +56,7 @@ NEW_KEYS = [
     "mineru_authorization_title",
     "mineru_authorization_description",
     "mineru_authorization_required",
+    "mineru_task_authorization",
     "uploading_for_recognition",
     "recognizing_online",
     "generating_output",
@@ -190,12 +195,29 @@ def test_checkpoint_message_is_resolved_at_render_time_not_server_side():
     assert "data.message ||" not in websocket
 
 
-def test_authorization_control_is_wired_through_i18n():
+def test_pdf_upload_consent_is_granted_per_task():
+    """Spec: one brief upload confirmation for each task, not one per batch."""
     template = TEMPLATE.read_text(encoding="utf-8")
+    upload = FILE_UPLOAD_JS.read_text(encoding="utf-8")
+    batch = BATCH_CONTROLLER_JS.read_text(encoding="utf-8")
+
+    # The old batch-level tick is gone; the disclosure text remains.
     assert 'id="mineruAuthorization"' in template
-    assert 'id="mineruPdfConsent"' in template
+    assert 'id="mineruPdfConsent"' not in template
     assert 'data-i18n="translation:mineru_authorization_title"' in template
     assert 'data-i18n="translation:mineru_authorization_description"' in template
+
+    # Every queued PDF row renders its own control, localized and reactive.
+    assert "mineru_task_authorization" in upload
+    assert "file.mineruAuthorized" in upload
+    assert "consent.onchange" in upload
+    assert "this._updateFileField(" in upload
+    assert "localeChanged" in upload
+
+    # The batch requires each PDF's own tick and never grants one itself.
+    assert "file.mineruAuthorized !== true" in batch
+    assert "file.mineruAuthorized = true" not in batch
+    assert "mineruPdfConsent" not in batch
 
 
 def _error_codes() -> list[str]:
