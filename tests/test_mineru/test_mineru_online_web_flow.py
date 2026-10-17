@@ -151,6 +151,18 @@ def _download(web, filename):
     return web.client.get(f"/api/files/{quote(filename)}")
 
 
+def _wait_for_worker_release(web, translation_id, timeout=10):
+    """Wait until the worker releases its execution claim.
+
+    The terminal status is published just before the claim is released; a
+    resume issued in that window is legitimately refused with 409.
+    """
+    deadline = time.time() + timeout
+    while (web.state_manager.is_execution_active(translation_id)
+           and time.time() < deadline):
+        time.sleep(0.005)
+
+
 def _pdf_text(path_or_bytes):
     if isinstance(path_or_bytes, (bytes, bytearray)):
         document = pymupdf.open("pdf", bytes(path_or_bytes))
@@ -400,6 +412,7 @@ def test_attempted_continuation_fails_closed_without_resubmission(web):
     translation_id = response.get_json()["translation_id"]
     assert len(web.http.submitted_files()) == 1
 
+    _wait_for_worker_release(web, translation_id)
     resumed = web.client.post(f"/api/resume/{translation_id}", json={})
     assert resumed.status_code == 200, resumed.get_json()
     second = _wait_for_terminal(web, translation_id, timeout=60)
