@@ -1,14 +1,15 @@
 # MinerU Online PDF Translation: Offline Release Verification (Ticket #24)
 
-Status: **offline verification complete on integration tip `271b2cc` (branch tip
-now `77eb24c`). A five-page and a twenty-page authorized live run passed with
-real MinerU recognition and DeepSeek translation; the twenty-page run required a
-`page_footer` contract fix (`77eb24c`).** The live five-minute pause plus
-continuation, browser smoke, and final operator/human acceptance remain
-**PENDING**. Issue
-[#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) stays
-open until the operator confirms acceptance. This report does not claim
-recognition accuracy or translation quality.
+Status: **accepted by the operator on 2026-10-17.** Offline verification
+complete; a five-page and a twenty-page authorized live run passed with real
+MinerU recognition and DeepSeek translation. The twenty-page run exposed a
+`page_footer` contract gap, fixed in `77eb24c`, and the continued run passed.
+The operator set the acceptance bar at the twenty-page run; the 198-page
+reference run, a live five-minute pause, browser smoke, and independent human
+visual review were not exercised and are recorded as waived for this
+personal-use release. Issue
+[#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) is
+closed. This report does not claim recognition accuracy or translation quality.
 
 ## Scope and limits
 
@@ -335,29 +336,24 @@ no resubmission) and completed:
 
 **Result: PASS after the fix.**
 
-## What remains for #24 to stay open
+## Acceptance record
 
-- **Live five-minute pause and continuation:** the bounded sample finished in
-  88 s, so a budget pause and its continuation were not observed live.
-- **Operator acceptance bar:** the operator set the bar at a twenty-page live
-  run, which passed after the `page_footer` fix. A 198-page run was not
-  requested; if it is later requested, it needs its own authorization and
-  whole-book checks.
-- **Runtime browser smoke:** coverage chip, empty-page chip, limitation note,
-  both report-download buttons, per-task PDF consent ticks, and a seven-locale
-  switch without reload while authorization/progress/pause/Continue/completion/
-  error states are visible. Per-task authorization and the other UI wiring are
-  verified statically and server-side, not by browser automation.
-- **Human visual acceptance:** inspect representative headings, column
-  transitions, images/captions, footnotes, tables/formulas, and target-language
-  readability. Record exactly which checks occurred; do not present automated
-  accounting as semantic-quality proof.
-- **Private artifacts:** retain under existing ignored storage; publish only
-  redacted summaries with explicit pass/fail/pending states.
-- **Release decision:** keep
-  [#24](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/24) open
-  until the operator confirms acceptance. Automated accounting is not semantic
-  proof.
+- **2026-10-17:** the operator accepted the twenty-page live run as release
+  acceptance. The bar was explicitly set at twenty pages; a 198-page reference
+  run was not requested.
+- **Exercised live:** Web upload with per-task consent, MinerU online
+  recognition, result validation, DeepSeek translation, PDF generation and
+  validation, download, and accounting. The twenty-page run included a real
+  contract fix (`page_footer`, `77eb24c`) and continued from the saved
+  recognition result without re-upload or resubmission.
+- **Not exercised, waived by the operator for this personal-use release:** live
+  five-minute pause and continuation, runtime browser smoke, and independent
+  human visual review. Static and server-side UI checks and the focused tests
+  pass, but no live browser session was run.
+- **Still true:** automated accounting is not proof of recognition accuracy or
+  translation quality; the live output remains a private personal-use artifact.
+- Private artifacts stay under Git-ignored storage; only redacted summaries are
+  published.
 
 ## Redaction and data handling
 
