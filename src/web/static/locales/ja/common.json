@@ -67,6 +67,9 @@
   "state_desync_syncing": "状態の不整合を検出しました: サーバーではジョブが {{status}} ですが、UI ではアクティブのままです。同期しています...",
   "translation_job_missing": "翻訳ジョブはサーバー上に存在しません。UI をリセットします。",
   "checkpoint_created_default": "チェックポイントを作成しました",
+  "checkpoint_recognition_paused": "{{name}} の認識はローカルで一時停止しました。保存済みの MinerU タスクは、PDF を再アップロードせずに続行できます。",
+  "checkpoint_translation_paused": "{{name}} の翻訳は一時停止しました。チェックポイントを作成しました。",
+  "checkpoint_rate_limited": "{{name}} の翻訳はレート制限後に一時停止しました。チェックポイントを作成しました。",
 
   "sending": "送信中...",
   "test_sent_default": "テストを送信しました。",

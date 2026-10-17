@@ -67,6 +67,9 @@
   "state_desync_syncing": "Desincronización de estado detectada: tarea {{status}} en el servidor pero la interfaz sigue activa. Sincronizando...",
   "translation_job_missing": "La tarea de traducción ya no existe en el servidor. Restableciendo la interfaz.",
   "checkpoint_created_default": "Punto de control creado",
+  "checkpoint_recognition_paused": "El reconocimiento de {{name}} se pausó localmente. La tarea de MinerU guardada puede continuarse sin volver a subir el PDF.",
+  "checkpoint_translation_paused": "La traducción de {{name}} se pausó; punto de control creado.",
+  "checkpoint_rate_limited": "La traducción de {{name}} se pausó tras un límite de velocidad; punto de control creado.",
 
   "sending": "Enviando...",
   "test_sent_default": "Prueba enviada.",

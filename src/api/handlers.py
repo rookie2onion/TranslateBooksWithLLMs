@@ -991,11 +991,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             # Mark checkpoint as interrupted in database
             checkpoint_manager.mark_interrupted(translation_id)
 
-            # Emit checkpoint_created event to trigger UI update
+            # Emit checkpoint_created event to trigger UI update. The browser
+            # resolves the locale key; the server never ships English prose.
             socketio.emit('checkpoint_created', {
                 'translation_id': translation_id,
                 'status': 'interrupted',
-                'message': 'Translation paused - checkpoint created'
+                'message_key': 'common:checkpoint_translation_paused',
+                'message_params': {
+                    'name': config.get('output_filename') or translation_id,
+                },
             }, namespace='/')
 
             # DON'T clean up uploaded file on interruption - keep it for resume capability
@@ -1303,7 +1307,10 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         socketio.emit('checkpoint_created', {
             'translation_id': translation_id,
             'status': 'rate_limited',
-            'message': pause_msg
+            'message_key': 'common:checkpoint_rate_limited',
+            'message_params': {
+                'name': config.get('output_filename') or translation_id,
+            },
         }, namespace='/')
 
         output_filepath = state_manager.get_translation_field(translation_id, 'output_filepath')
@@ -1346,7 +1353,13 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         socketio.emit('checkpoint_created', {
             'translation_id': translation_id,
             'status': 'interrupted',
-            'message': 'Recognition paused locally; the saved MinerU task can be continued',
+            # The browser resolves this key through t() at render time, so the
+            # log line follows a language switch instead of freezing the
+            # server's English wording.
+            'message_key': 'common:checkpoint_recognition_paused',
+            'message_params': {
+                'name': config.get('output_filename') or translation_id,
+            },
         }, namespace='/')
 
     except Exception as e:

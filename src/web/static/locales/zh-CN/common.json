@@ -67,6 +67,9 @@
   "state_desync_syncing": "检测到状态不同步：服务器上任务 {{status}}，但界面仍处于活动状态。正在同步...",
   "translation_job_missing": "服务器上不再存在该翻译任务。正在重置界面。",
   "checkpoint_created_default": "检查点已创建",
+  "checkpoint_recognition_paused": "{{name}} 的识别已在本地暂停。已保存的 MinerU 任务可继续，无需重新上传 PDF。",
+  "checkpoint_translation_paused": "{{name}} 的翻译已暂停；检查点已创建。",
+  "checkpoint_rate_limited": "{{name}} 的翻译因速率限制已暂停；检查点已创建。",
 
   "sending": "发送中...",
   "test_sent_default": "测试已发送。",
