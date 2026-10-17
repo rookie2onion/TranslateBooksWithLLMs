@@ -338,22 +338,22 @@ SOFT_LIMIT_RATIO = float(os.getenv('SOFT_LIMIT_RATIO', '0.8'))
 
 # === Translation Buffer Configuration ===
 TRANSLATION_OUTPUT_MULTIPLIER = 2
-"""Multiplicateur pour la longueur de sortie estimée (certaines langues cibles
-peuvent être 2x plus longues que la source)"""
+"""Multiplier for the estimated output length (some target languages can be
+twice as long as the source)."""
 
 TRANSLATION_TAG_OVERHEAD = 50
-"""Tokens réservés pour les balises XML de traduction (<Translated>...</Translated>)"""
+"""Tokens reserved for the XML translation tags (<Translated>...</Translated>)."""
 
 # === Placeholder Validation ===
 MAX_PLACEHOLDER_RETRIES = 3
-"""Nombre maximum de tentatives de validation des placeholders"""
+"""Maximum number of placeholder validation attempts."""
 
 MAX_PLACEHOLDER_CORRECTION_ATTEMPTS = 2
-"""Nombre maximum de tentatives de correction LLM pour les placeholders malformés"""
+"""Maximum number of LLM correction attempts for malformed placeholders."""
 
 # === Chunking Limits ===
 MIN_CHUNK_SIZE_TOKENS = 50
-"""Taille minimale d'un chunk pour éviter la sur-fragmentation"""
+"""Minimum chunk size to avoid over-fragmentation."""
 
 # LLM Provider configuration
 # LLM_PROVIDER, GEMINI_*, OPENAI_*, OPENROUTER_API_KEY/MODEL, MISTRAL_API_KEY/MODEL,
