@@ -1,9 +1,9 @@
 # MinerU Online Reconstruction: Progress and Evidence
 
-Status: #14 and #15 are implemented, reviewed and committed (`52fd47a`,
-`56ccc1f`) on branch `feat/mineru-online-vlm`. #16 (dual-format acceptance
-package) is implemented and awaiting review. No provider call, upload or
-translation LLM was used by any step below.
+Status: #14, #15 and #16 are implemented, reviewed and committed (`52fd47a`,
+`56ccc1f`, `b44296c`) on branch `feat/mineru-online-vlm`. The acceptance package
+is ready for the user's visual and expression-preservation review; no provider
+call, upload or translation LLM was used by any step below.
 
 Issues: [#14 PDF](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/14),
 [#15 EPUB](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/15),
@@ -22,7 +22,7 @@ recognition cache remain under Git-ignored `data/`.
 | --- | --- | --- |
 | #14 Reconstruct the cached sample as a source-language PDF | Implemented, reviewed, committed (`52fd47a`) | 17 focused tests and 228 PDF regression tests pass; real probe run produced a 10-page PDF; provenance counts match the cache. |
 | #15 Export the reconstructed sample as EPUB | Implemented, awaiting code review | 8 focused tests; real probe run produced a 4-section EPUB with 43 paragraphs and 10 images; byte-deterministic output; shared provenance. |
-| #16 Dual-format acceptance package | Implemented, awaiting code review | 9 focused tests; real package passes 13 automated checks with `reader_check` pending; report, checks, manifest and contact sheet produced. |
+| #16 Dual-format acceptance package | Implemented, reviewed, committed (`b44296c`) | 9 focused tests; real package passes 13 automated checks with `reader_check` pending; report, checks, manifest and contact sheet produced. |
 
 ## Decisions
 
