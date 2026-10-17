@@ -148,6 +148,18 @@ def test_checkpoint_paused_message_keeps_the_name_token(locale, key):
     assert translated == reference, f"{locale}: {key} tokens differ"
 
 
+def test_web_limit_fallbacks_match_the_server_admission_limits():
+    """The JS fallbacks cannot drift silently from the server's ceilings."""
+    from src.core.mineru.admission import MAX_BYTES, MAX_PAGES
+
+    source = MINERU_ERRORS_JS.read_text(encoding="utf-8")
+    pages = re.search(r"const DEFAULT_MAX_PAGES = (\d+);", source)
+    size = re.search(r"const DEFAULT_MAX_BYTES = (\d+);", source)
+    assert pages and size, "mineru-errors.js must declare both limit fallbacks"
+    assert int(pages.group(1)) == MAX_PAGES
+    assert int(size.group(1)) == MAX_BYTES
+
+
 def test_the_output_generation_phase_has_a_localized_progress_label():
     progress = PROGRESS_JS.read_text(encoding="utf-8")
     assert "case 'output_generation':" in progress
