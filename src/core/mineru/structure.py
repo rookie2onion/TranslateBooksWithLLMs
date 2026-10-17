@@ -27,6 +27,7 @@ from src.core.pdf.content import ParagraphFormat, PdfImage, PdfPlainContent
 from .cache import IMAGE_FORMATS, CachedBlock, MineruCache, PageInfo
 
 TOP_BAND_RATIO = 0.12
+BOTTOM_BAND_RATIO = 0.88
 PAGE_NUMBER_MAX_DIGITS = 3
 RUNNING_HEADER_MAX_CHARS = 200
 _ROMAN_NUMERAL = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
@@ -240,16 +241,18 @@ def adapt(cache: MineruCache) -> SourceContent:
         accounted.add(block.index)
 
     def running_matter(block: CachedBlock, text: str, *, kind: str, label: str,
-                       code: str) -> None:
+                       code: str, bottom: bool = False) -> None:
         page = cache.pages[block.page_index]
         if not text:
             exclude(block, "empty_record", "empty recognition record (no text)")
             return
-        if _in_top_band(block, page) and _looks_like_running_text(text, label):
+        in_band = _in_bottom_band(block, page) if bottom else _in_top_band(block, page)
+        if in_band and _looks_like_running_text(text, label):
             occurrences = sum(1 for other in cache.blocks
                               if other.type == block.type and other.text.strip() == text)
+            margin = "bottom" if bottom else "top"
             exclude(block, kind,
-                    f"running {label} in the top margin ({len(text)} characters, "
+                    f"running {label} in the {margin} margin ({len(text)} characters, "
                     f"{occurrences} occurrence(s) in this sample)")
             return
         emit(text, "paragraph", "normal", ParagraphFormat(), block)
@@ -357,6 +360,10 @@ def adapt(cache: MineruCache) -> SourceContent:
         elif block.type == "page_header":
             running_matter(block, text, kind="running_header", label="header",
                            code="header_outside_top_margin")
+
+        elif block.type == "page_footer":
+            running_matter(block, text, kind="running_footer", label="footer",
+                           code="footer_outside_bottom_margin", bottom=True)
 
         elif block.type == "page_number":
             running_matter(block, text, kind="running_page_number", label="page number",
@@ -555,6 +562,10 @@ def _preserved_provenance(block: CachedBlock, page: PageInfo, *, kind: str,
 
 def _in_top_band(block: CachedBlock, page: PageInfo) -> bool:
     return block.bbox[3] <= TOP_BAND_RATIO * page.height_pt
+
+
+def _in_bottom_band(block: CachedBlock, page: PageInfo) -> bool:
+    return block.bbox[1] >= BOTTOM_BAND_RATIO * page.height_pt
 
 
 def _looks_like_page_number(block: CachedBlock, page: PageInfo) -> bool:

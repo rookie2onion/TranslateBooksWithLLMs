@@ -126,6 +126,7 @@ def _v2_block(spec: dict) -> dict:
     payload = {"type": "text", "content": spec["text"]}
     key = {"page_footnote": "page_footnote_content",
            "page_header": "page_header_content",
+           "page_footer": "page_footer_content",
            "page_number": "page_number_content"}.get(kind)
     if key is None:
         # An unsupported recognised block type: the loader must reject it

@@ -17,7 +17,7 @@ from src.utils.hashing import sha256_file
 
 KNOWN_BLOCK_TYPES = frozenset(
     {"title", "paragraph", "image", "table", "equation_interline",
-     "page_header", "page_footnote", "page_number"}
+     "page_header", "page_footer", "page_footnote", "page_number"}
 )
 
 # MinerU 3.4.4 V2 contract values for a table block (the online service reported
@@ -255,6 +255,7 @@ def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, ent
     key = {"title": "title_content", "paragraph": "paragraph_content",
            "page_footnote": "page_footnote_content",
            "page_header": "page_header_content",
+           "page_footer": "page_footer_content",
            "page_number": "page_number_content"}[kind]
     text = "".join(_runs(content.get(key), f"{where} {key}"))
     level = content.get("level") if kind == "title" else None

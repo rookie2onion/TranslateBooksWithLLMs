@@ -283,3 +283,42 @@ def test_build_pdf_preview_flags_review_when_structure_is_suspect(tmp_path):
     assert provenance["review_required"] is True
     codes = [finding["code"] for finding in provenance["findings"]]
     assert "header_outside_top_margin" in codes
+
+
+def test_adapt_excludes_a_running_page_footer(tmp_path):
+    pages = default_pages()
+    pages[0]["blocks"].append(
+        {"type": "page_footer", "text": "Running footer", "bbox": [60, 900, 500, 930]})
+
+    reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
+
+    footer = next(item for item in reconstruction.exclusions
+                  if item.kind == "running_footer")
+    assert footer.text == "Running footer"
+    assert "bottom margin" in footer.reason
+    assert reconstruction.counts["blocks_accounted"] == reconstruction.counts["blocks_seen"]
+
+
+def test_adapt_retains_a_page_footer_outside_the_bottom_margin(tmp_path):
+    pages = default_pages()
+    pages[0]["blocks"].append(
+        {"type": "page_footer", "text": "A note in the body area.",
+         "bbox": [60, 400, 500, 430]})
+
+    reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
+
+    assert "A note in the body area." in reconstruction.paragraphs
+    assert any(item.code == "footer_outside_bottom_margin"
+               for item in reconstruction.findings)
+    assert reconstruction.review_required is True
+
+
+def test_adapt_records_an_empty_page_footer(tmp_path):
+    pages = default_pages()
+    pages[0]["blocks"].append(
+        {"type": "page_footer", "text": "", "bbox": [60, 900, 500, 930]})
+
+    reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
+
+    assert any(item.kind == "empty_record" and item.source_type == "page_footer"
+               for item in reconstruction.exclusions)
