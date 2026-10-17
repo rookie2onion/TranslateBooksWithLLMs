@@ -1,8 +1,8 @@
 # MinerU Online Reconstruction: Progress and Evidence
 
-Status: #14 is implemented, reviewed and committed (`52fd47a`) on branch
-`feat/mineru-online-vlm`. #15 (EPUB export) is implemented and awaiting review;
-#16 (dual-format acceptance package) is pending. No provider call, upload or
+Status: #14 and #15 are implemented, reviewed and committed (`52fd47a`,
+`56ccc1f`) on branch `feat/mineru-online-vlm`. #16 (dual-format acceptance
+package) is implemented and awaiting review. No provider call, upload or
 translation LLM was used by any step below.
 
 Issues: [#14 PDF](https://github.com/rookie2onion/TranslateBooksWithLLMs/issues/14),
@@ -22,7 +22,7 @@ recognition cache remain under Git-ignored `data/`.
 | --- | --- | --- |
 | #14 Reconstruct the cached sample as a source-language PDF | Implemented, reviewed, committed (`52fd47a`) | 17 focused tests and 228 PDF regression tests pass; real probe run produced a 10-page PDF; provenance counts match the cache. |
 | #15 Export the reconstructed sample as EPUB | Implemented, awaiting code review | 8 focused tests; real probe run produced a 4-section EPUB with 43 paragraphs and 10 images; byte-deterministic output; shared provenance. |
-| #16 Dual-format acceptance package | Pending | Consumes both `preview.provenance.json` files. |
+| #16 Dual-format acceptance package | Implemented, awaiting code review | 9 focused tests; real package passes 13 automated checks with `reader_check` pending; report, checks, manifest and contact sheet produced. |
 
 ## Decisions
 
@@ -73,6 +73,12 @@ where noted:
 - EPUB tests now also cover navigation anchor targets, the absence of a
   fabricated front-matter chapter, the trusted-title failure, and the CLI
   `--format epub --language --title` path.
+- The acceptance review found a skippable contact sheet, circular reading-order
+  evidence, truncated report cells and a dropped review flag. The contact sheet
+  is now required (missing source PDF fails), reading order is checked against
+  the raw recognised block order and reconstructed PDF pages, report cells are
+  HTML/pipes escaped and no longer truncated, and a provenance review flag
+  surfaces as a pending `review_status` check.
 - `tests/standalone/mineru_online_probe.py` stays untracked and out of this
   commit; it produced the authorized cache and performs uploads, which this
   offline slice must not do.
@@ -123,6 +129,26 @@ reader_check.performed: false
 review_required: false
 ```
 
+Acceptance focused tests (`tests/test_mineru/test_mineru_online_acceptance.py`)
+cover the package layout, passing checks, foreign provenance, a tampered cache,
+markdown escaping, network refusal, output-inside-cache refusal and the CLI
+`--format both` path.
+
+Real acceptance evidence (`data/mineru-online/acceptance/`, Git-ignored):
+
+```text
+Acceptance package: data\mineru-online\acceptance (passed)
+14 checks: 13 pass, 1 pending (reader_check), 0 fail
+block_accounting: 65 of 65 blocks accounted for
+block_coverage: page_footnote 3/3, page_header 3/3, page_number 3/3, paragraph 41/41,
+                title 5/5
+reading_order: 43 paragraphs in order; EPUB sequence matches; PDF pages 1-10
+image_integrity: 10 image instances verified
+exclusions_justified: 14 exclusions justified
+cache_unmodified: 13 cache files unchanged
+contact_sheet: 5 source pages rendered
+```
+
 ## Not proven
 
 Visual fidelity, whole-book reading order, table and formula handling, image
@@ -135,5 +161,7 @@ reader and was not run through `epubcheck`.
 
 ## Next
 
-- #16: collect the source contact sheet, PDF, EPUB and a comparison report with
-  machine-readable checks.
+- Hand the acceptance package to the user for explicit expression-preservation
+  review (PDF, EPUB, contact sheet, report).
+- Translation, image redrawing, tables/formulas, whole-book coverage and final
+  visual acceptance remain later phases; none is claimed.

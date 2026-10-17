@@ -23,6 +23,10 @@ python -m src.core.mineru --cache data/mineru-online/probe-001 \
 # EPUB 3 preview (language is explicit; `und` means undetermined)
 python -m src.core.mineru --cache data/mineru-online/probe-001 \
     --output-dir data/mineru-online/recon-001-epub --format epub --language de
+
+# Both previews plus the acceptance package
+python -m src.core.mineru --cache data/mineru-online/probe-001 \
+    --output-dir data/mineru-online/acceptance --format both --language de
 ```
 
 Each run writes one artifact and one `preview.provenance.json` into the output
@@ -88,6 +92,30 @@ recognised block is accounted for: `counts.blocks_accounted` equals
 - No reader application is opened by the build. `reader_check.performed` is
   `false` in the provenance, and visual acceptance remains a human step.
 
+## Acceptance package
+
+`--format both` builds both previews and then collects, under one directory:
+
+```text
+report.md              Human-readable checks, content accounting, exclusions,
+                       findings, page mapping, limitations and the human checklist.
+checks.json            Machine-readable check results, failures, pending items,
+                       artifact hashes and the recorded limits.
+manifest.json          SHA-256 of every packaged file.
+contact-sheet.jpg      The source sample pages, labelled with source PDF page numbers.
+pdf/preview.pdf        The reflowed PDF preview and its provenance.
+epub/preview.epub      The EPUB 3 preview and its provenance.
+```
+
+The checks cover artifact presence, provenance identity against the accepted
+cache, cache fingerprints, block accounting, per-content-type coverage, PDF/EPUB
+consistency, reading order against the recognised block order (including the
+reconstructed PDF page of every paragraph), image integrity, caption and credit
+association, exclusion reasons, source-page mapping, structural review status
+and the contact sheet. `reader_check` is always `pending`: the build never
+reports an unobserved reader or visual check as passed. The command exits
+non-zero when any automated check fails.
+
 ## Known limitations
 
 - Reading order is MinerU's V2 block order; the adapter does not re-derive
@@ -143,3 +171,5 @@ fixture package:
   adaptation and the PDF preview.
 - `tests/test_mineru/test_mineru_online_epub.py` — EPUB container, manifest,
   spine, navigation, XHTML, resources, determinism and cache protection.
+- `tests/test_mineru/test_mineru_online_acceptance.py` — package layout, check
+  results, foreign provenance, tampered cache, escaping, CLI `--format both`.

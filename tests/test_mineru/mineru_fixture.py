@@ -102,6 +102,19 @@ def _layout_block(spec: dict, index: int) -> dict:
     return block
 
 
+def _sample_pdf_bytes(page_count: int) -> bytes:
+    import pymupdf
+
+    document = pymupdf.open()
+    try:
+        for number in range(1, page_count + 1):
+            page = document.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
+            page.insert_text((60, 80), f"Source page {number}", fontsize=18)
+        return document.tobytes()
+    finally:
+        document.close()
+
+
 def build_cache(root: Path, pages: list[dict] | None = None,
                 source_pages: list[int] | None = None,
                 total_pages: int = 198) -> Path:
@@ -112,6 +125,7 @@ def build_cache(root: Path, pages: list[dict] | None = None,
     (root / "images").mkdir(exist_ok=True)
     (root / "images" / "fig1.png").write_bytes(_png_bytes())
     (root / "images" / "fig2.jpg").write_bytes(_jpeg_bytes())
+    (root / "sample.pdf").write_bytes(_sample_pdf_bytes(len(pages)))
 
     v2 = [[_v2_block(spec) for spec in page["blocks"]] for page in pages]
     (root / "abc_content_list_v2.json").write_text(

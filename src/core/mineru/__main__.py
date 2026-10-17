@@ -8,7 +8,7 @@ Usage::
         --output-dir data/mineru-online/recon-001-epub --format epub --language de
 
 The command never uploads, never calls a translation LLM and never modifies the
-cache. It backs the reconstruction acceptance slices (issues #14 and #15).
+cache. It backs the reconstruction acceptance slices (issues #14, #15 and #16).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Union
 
+from .acceptance import build_acceptance_package
 from .cache import MineruCache, MineruCacheError, load_cache
 from .epub_preview import DEFAULT_LANGUAGE, EpubPreviewResult, build_epub_preview
 from .export import MineruExportError
@@ -36,9 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache", required=True, type=Path,
                         help="Authorized cached MinerU result directory.")
     parser.add_argument("--output-dir", required=True, type=Path,
-                        help="Directory for preview.pdf or preview.epub plus provenance.")
-    parser.add_argument("--format", choices=("pdf", "epub"), default="pdf",
-                        help="Output format (default: pdf).")
+                        help="Directory for the preview artifact(s) and provenance; "
+                             "both mode creates pdf/ and epub/ subdirectories.")
+    parser.add_argument("--format", choices=("pdf", "epub", "both"), default="pdf",
+                        help="Output format (default: pdf; both builds the acceptance package).")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE,
                         help="BCP-47 source language for EPUB metadata (default: und).")
     parser.add_argument("--title", default=None,
@@ -49,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         cache = load_cache(args.cache)
+        if args.format == "both":
+            return _build_both(cache, args)
         if args.format == "epub":
             result: Union[EpubPreviewResult, PdfPreviewResult] = build_epub_preview(
                 cache, args.output_dir, language=args.language, title=args.title)
@@ -70,6 +74,48 @@ def main(argv: list[str] | None = None) -> int:
         if summary["review_required"]:
             print("REVIEW REQUIRED: see the findings in the provenance file.")
     return 0
+
+
+def _build_both(cache: MineruCache, args: argparse.Namespace) -> int:
+    output_dir = Path(args.output_dir)
+    pdf = build_pdf_preview(cache, output_dir / "pdf")
+    epub = build_epub_preview(cache, output_dir / "epub", language=args.language,
+                              title=args.title)
+    package = build_acceptance_package(cache, output_dir / "pdf", output_dir / "epub",
+                                       output_dir)
+    summary = {
+        "execution": "passed" if package.passed else "failed",
+        "format": "both",
+        "translated": False,
+        "complete_book": False,
+        "sample_pages": list(cache.source_pages),
+        "source_total_pages": cache.source_total_pages,
+        "package": str(output_dir),
+        "report": str(package.report_path),
+        "checks": str(package.checks_path),
+        "pdf_pages": pdf.page_count,
+        "epub_sections": epub.section_count,
+        "paragraph_count": pdf.paragraph_count,
+        "image_count": pdf.image_count,
+        "failures": list(package.failures),
+        "pending": list(package.pending),
+        "reader_check_performed": False,
+        "review_required": pdf.review_required or epub.review_required,
+    }
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False))
+    else:
+        state = "passed" if package.passed else "FAILED"
+        print(f"Acceptance package: {output_dir} ({state})")
+        print(f"Report: {package.report_path}")
+        print(f"Checks: {package.checks_path}")
+        print("Untranslated partial-book previews; the cache was not modified.")
+        print("Reader-open check and human visual acceptance remain pending.")
+        if package.pending:
+            print("Pending checks: " + ", ".join(package.pending))
+        if package.failures:
+            print("Failed checks: " + ", ".join(package.failures))
+    return 0 if package.passed else 1
 
 
 def _summary(cache: MineruCache, output_format: str,

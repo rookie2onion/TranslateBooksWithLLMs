@@ -170,9 +170,15 @@ def _image_files(reconstruction: Reconstruction) -> Dict[str, Tuple[str, bytes]]
     return files
 
 
+def image_resource_name(image_path: str, sha256: str) -> str:
+    """Cache-relative EPUB resource name for one image (path supplies the suffix)."""
+    suffix = Path(image_path).suffix.lower().lstrip(".")
+    suffix = "jpg" if suffix == "jpeg" else suffix
+    return f"images/img-{sha256[:12]}.{suffix}"
+
+
 def _image_name(asset: ImageAsset) -> str:
-    suffix = "jpg" if asset.ext == "jpeg" else asset.ext
-    return f"images/img-{asset.sha256[:12]}.{suffix}"
+    return image_resource_name(str(asset.path), asset.sha256)
 
 
 def _section_document(reconstruction: Reconstruction, section: _Section, number: int,
