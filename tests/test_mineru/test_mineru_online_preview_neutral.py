@@ -138,7 +138,16 @@ def test_preview_artifacts_are_the_decorated_neutral_view(tmp_path):
     for decorated, anchor in zip(provenance["images"], neutral_anchors):
         assert decorated["image_sha256"] == source.images_by_paragraph[anchor][0].sha256
 
-    assert _epub_block_texts(epub.epub_path) == [notice, *source.paragraphs]
+    expected_blocks = [
+        notice,
+        "SAMPLE BOOK",
+        "Ada Lovelace",
+        "The first body paragraph.",
+        "Figure 1: a caption",
+        "A substantive footnote.",
+    ]
+    assert _epub_block_texts(epub.epub_path) == expected_blocks
+    assert expected_blocks == [notice, *source.paragraphs]
 
 
 def test_preview_metadata_keeps_the_suffix_and_inferred_author(tmp_path):
