@@ -1,5 +1,12 @@
 """Structural adaptation of a validated MinerU cache into renderable content.
 
+``adapt`` builds the canonical, preview-neutral source view. That view is what
+the translated-book workflow consumes: it starts at the first recognised
+paragraph and contains no preview notice, title suffix or inferred author.
+``apply_preview_decoration`` adds those preview-only elements exactly at the
+preview boundary, so the existing artifacts keep their established content while
+the translation-facing view stays clean.
+
 The adapter follows the recognised reading order, keeps headings, paragraphs,
 figure captions and substantive footnotes, and excludes only running matter it
 can justify (typed headers and page numbers in the top margin). Every recognised
@@ -11,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Set, Tuple
 
@@ -88,8 +95,37 @@ class Finding:
 
 
 @dataclass(frozen=True)
+class SourceContent:
+    """Canonical source-order document without preview decoration.
+
+    This is the view the translated-book workflow consumes: the first paragraph
+    is the first recognised paragraph, the title is the recognised title only,
+    and no inferred author or preview notice is attached.
+    """
+
+    title: str
+    page_size: Tuple[float, float]
+    paragraphs: Tuple[str, ...]
+    styles: Tuple[str, ...]
+    formats: Tuple[ParagraphFormat, ...]
+    images_by_paragraph: Mapping[int, Tuple[ImageAsset, ...]]
+    provenance: Tuple[Provenance, ...]
+    exclusions: Tuple[Exclusion, ...]
+    findings: Tuple[Finding, ...]
+    page_map: Tuple[PageInfo, ...]
+    counts: Mapping[str, int]
+    review_required: bool
+
+
+@dataclass(frozen=True)
 class Reconstruction:
-    """Source-order document built from one cached MinerU result."""
+    """Preview-ready document: neutral source content plus preview decoration.
+
+    The preview notice paragraph is index 0, the title carries the preview
+    suffix through :attr:`preview_title`, and ``author`` may hold the
+    convenience inference previews have always exposed. Nothing here is part of
+    the canonical source view.
+    """
 
     title: str
     author: str
@@ -129,8 +165,8 @@ class Reconstruction:
         )
 
 
-def adapt(cache: MineruCache) -> Reconstruction:
-    """Build the source-order document from a validated cache."""
+def adapt(cache: MineruCache) -> SourceContent:
+    """Build the canonical, preview-neutral source-order document."""
     paragraphs: List[str] = []
     styles: List[str] = []
     formats: List[ParagraphFormat] = []
@@ -186,12 +222,7 @@ def adapt(cache: MineruCache) -> Reconstruction:
                     f"retained as a paragraph for review.",
             sample_page=block.page_index, block_index=block.index, severity="review"))
 
-    notice = _notice_text(cache)
-    emit(notice, _NOTICE_KIND, "normal", ParagraphFormat(italic=True))
-
-    first_title = next((block for block in cache.blocks
-                        if block.type == "title" and (block.level or 1) == 1
-                        and block.text.strip()), None)
+    first_title = _first_level_one_title(cache)
     for block in cache.blocks:
         page = cache.pages[block.page_index]
         text = block.text.strip()
@@ -273,7 +304,6 @@ def adapt(cache: MineruCache) -> Reconstruction:
             message="This recognised block reached neither output nor an exclusion.",
             sample_page=block.page_index, block_index=block.index, severity="review"))
 
-    author = _author_before_title(cache, first_title)
     counts = {
         "blocks_seen": len(cache.blocks),
         "blocks_accounted": len(accounted),
@@ -286,10 +316,8 @@ def adapt(cache: MineruCache) -> Reconstruction:
         "review_findings": sum(1 for item in findings if item.severity == "review"),
     }
     first_page = cache.pages[0]
-    return Reconstruction(
+    return SourceContent(
         title=first_title.text.strip() if first_title else "",
-        author=author,
-        notice=notice,
         page_size=(first_page.width_pt, first_page.height_pt),
         paragraphs=tuple(paragraphs),
         styles=tuple(styles),
@@ -302,6 +330,69 @@ def adapt(cache: MineruCache) -> Reconstruction:
         counts=counts,
         review_required=any(item.severity == "review" for item in findings),
     )
+
+
+def apply_preview_decoration(cache: MineruCache,
+                             source: SourceContent) -> Reconstruction:
+    """Add the preview-only notice paragraph and metadata to a source view.
+
+    The notice becomes paragraph 0, so every source paragraph index and image
+    anchor shifts by one. The inferred author stays a preview convenience and is
+    never attached to the canonical source view.
+    """
+    notice = _notice_text(cache)
+    paragraphs = (notice,) + source.paragraphs
+    styles = ("normal",) + source.styles
+    formats = (ParagraphFormat(italic=True),) + source.formats
+    images = {anchor + 1: assets
+              for anchor, assets in source.images_by_paragraph.items()}
+    provenance = (_notice_provenance(notice),) + tuple(
+        _shift_preview_provenance(item) for item in source.provenance)
+    counts = dict(source.counts)
+    counts["paragraphs"] = len(paragraphs)
+    first_title = _first_level_one_title(cache)
+    return Reconstruction(
+        title=source.title,
+        author=_author_before_title(cache, first_title),
+        notice=notice,
+        page_size=source.page_size,
+        paragraphs=paragraphs,
+        styles=styles,
+        formats=formats,
+        images_by_paragraph=images,
+        provenance=provenance,
+        exclusions=source.exclusions,
+        findings=source.findings,
+        page_map=source.page_map,
+        counts=counts,
+        review_required=source.review_required,
+    )
+
+
+def _notice_provenance(notice: str) -> Provenance:
+    return Provenance(
+        kind=_NOTICE_KIND,
+        source_type="generated",
+        sample_page=None,
+        source_page=None,
+        bbox=None,
+        text_sha256=_sha256_text(notice),
+        output_index=0,
+    )
+
+
+def _shift_preview_provenance(item: Provenance) -> Provenance:
+    """Shift one neutral source record to its decorated preview position."""
+    if item.output_index is not None:
+        return replace(item, output_index=item.output_index + 1)
+    anchor = item.anchor_index
+    return replace(item, anchor_index=None if anchor is None else anchor + 1)
+
+
+def _first_level_one_title(cache: MineruCache) -> Optional[CachedBlock]:
+    return next((block for block in cache.blocks
+                 if block.type == "title" and (block.level or 1) == 1
+                 and block.text.strip()), None)
 
 
 def _notice_text(cache: MineruCache) -> str:

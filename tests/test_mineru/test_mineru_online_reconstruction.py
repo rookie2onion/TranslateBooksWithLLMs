@@ -2,7 +2,8 @@
 
 Seams under test:
 - A: ``src.core.mineru.cache.load_cache`` — cache validation and provenance binding.
-- B: ``src.core.mineru.structure.adapt`` — content model, reading order, exclusions.
+- B: ``src.core.mineru.structure.adapt`` — preview-neutral content model, reading
+  order, exclusions. Preview decoration is applied at the preview boundary.
 - C: ``src.core.mineru.pdf_preview.build_pdf_preview`` — real PDF plus provenance sidecar.
 """
 
@@ -110,12 +111,10 @@ def test_load_cache_rejects_unsupported_block_type(tmp_path):
 def test_adapt_preserves_order_roles_and_excludes_running_matter(tmp_path):
     reconstruction = adapt(_load(tmp_path, source_pages=[1, 19]))
 
-    assert reconstruction.paragraphs[0].startswith(
-        "Untranslated MinerU reconstruction preview")
-    assert reconstruction.styles[1] == "heading1"
-    assert reconstruction.paragraphs[1] == "SAMPLE BOOK"
-    assert reconstruction.paragraphs[2] == "Ada Lovelace"
-    assert list(reconstruction.images_by_paragraph) == [2, 3]
+    assert reconstruction.paragraphs[0] == "SAMPLE BOOK"
+    assert reconstruction.styles[0] == "heading1"
+    assert reconstruction.paragraphs[1] == "Ada Lovelace"
+    assert list(reconstruction.images_by_paragraph) == [1, 2]
 
     body = reconstruction.paragraphs.index("The first body paragraph.")
     assert reconstruction.paragraphs[body + 1] == "Figure 1: a caption"
@@ -157,7 +156,7 @@ def test_adapt_exposes_image_assets_and_their_footnote(tmp_path):
 
     reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
 
-    asset = reconstruction.images_by_paragraph[2][0]
+    asset = reconstruction.images_by_paragraph[1][0]
     assert asset.data.startswith(b"\x89PNG")
     assert asset.ext == "png"
     assert (asset.width_pt, asset.height_pt) == pytest.approx((528.0, 320.0))

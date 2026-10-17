@@ -11,7 +11,16 @@ from .cache import CachedBlock, MineruCache, MineruCacheError, PageInfo, load_ca
 from .epub_preview import EpubPreviewResult, build_epub_preview
 from .export import MineruExportError
 from .pdf_preview import PdfPreviewResult, build_pdf_preview
-from .structure import Exclusion, Finding, ImageAsset, Provenance, Reconstruction, adapt
+from .structure import (
+    Exclusion,
+    Finding,
+    ImageAsset,
+    Provenance,
+    Reconstruction,
+    SourceContent,
+    adapt,
+    apply_preview_decoration,
+)
 
 __all__ = [
     "CachedBlock",
@@ -26,7 +35,9 @@ __all__ = [
     "PdfPreviewResult",
     "Provenance",
     "Reconstruction",
+    "SourceContent",
     "adapt",
+    "apply_preview_decoration",
     "build_epub_preview",
     "build_pdf_preview",
     "load_cache",

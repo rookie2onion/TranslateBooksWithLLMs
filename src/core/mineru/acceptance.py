@@ -24,7 +24,7 @@ from xml.etree import ElementTree
 from .cache import KNOWN_BLOCK_TYPES, MineruCache
 from .epub_preview import image_resource_name
 from .export import MineruExportError, ensure_output_outside_cache, write_json_atomic
-from .structure import Reconstruction, adapt
+from .structure import Reconstruction, adapt, apply_preview_decoration
 
 SCHEMA_VERSION = 1
 XHTML = "{http://www.w3.org/1999/xhtml}"
@@ -72,7 +72,7 @@ def build_acceptance_package(cache: MineruCache, pdf_dir: Path, epub_dir: Path,
         if not path.is_file():
             raise MineruExportError(f"Missing preview artifact: {path}")
 
-    reconstruction = adapt(cache)
+    reconstruction = apply_preview_decoration(cache, adapt(cache))
     pdf_pages = _pdf_paragraph_pages(pdf_path, reconstruction.paragraphs)
     checks: List[Check] = []
     checks.append(_check_artifacts(pdf_path, epub_path))
