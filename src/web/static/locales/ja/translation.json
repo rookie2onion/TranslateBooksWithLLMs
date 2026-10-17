@@ -314,6 +314,7 @@
   "mineru_error_continuation_result_unavailable": "保存済みの認識結果が見つからないか、このタスクと一致しなくなりました。再アップロードや再送信は行われていません。もう一度認識する場合は新しいタスクを開始してください。",
   "mineru_error_continuation_upload_unrecoverable": "以前の MinerU へのアップロードが完了しておらず、その一時アップロードリンクは復元できません。このタスクは自動で続行できません。再送信は行われていません。",
   "mineru_error_submission_unknown": "MinerU への送信結果が不明です。ドキュメントは再送信されていません。新しいタスクを開始する前に MinerU を確認してください。",
+  "mineru_error_submission_rejected": "MinerU は送信を拒否し、認識タスクは受け付けられませんでした。このタスクを続行すると送信を再試行できます。",
   "mineru_error_upload_failed": "PDF の MinerU へのアップロードが完了しませんでした。ドキュメントは再送信されていません。後で新しいタスクを開始してください。",
   "mineru_error_recognition_failed": "MinerU はこの PDF を認識できませんでした。ドキュメントを確認し、新しいタスクを開始してください。",
   "mineru_error_recognition_timeout": "オンライン認識はローカルの 5 分間の予算後に一時停止しました。リモートの MinerU タスクはまだ実行中の可能性があります。続行すると、PDF を再アップロードせずに保存済みタスクを再利用します。",

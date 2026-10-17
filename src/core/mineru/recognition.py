@@ -57,6 +57,7 @@ from .errors import (
     MineruRequestRejected,
     MineruResponseInvalid,
     MineruResultInvalid,
+    MineruSubmissionRejected,
     MineruSubmissionUncertain,
     MineruTimeout,
     MineruTokenMissing,
@@ -458,7 +459,25 @@ def _run_submission(
         except MineruRequestRejected as exc:
             save(phase="rejected", error_code=exc.code, error_message=str(exc))
             raise
-        except (MineruNetworkError, MineruResponseInvalid, MineruTimeout) as exc:
+        except MineruSubmissionRejected as exc:
+            # The provider definitely accepted no task: a later continuation
+            # may safely try the submission again.
+            save(phase="admitted", error_code=exc.code, error_message=str(exc))
+            raise
+        except MineruTimeout as exc:
+            if getattr(exc, "request_sent", True) is False:
+                # The deadline elapsed before the request left the process.
+                # This is a local pause, not an ambiguous remote outcome.
+                save(phase="admitted", error_code=exc.code,
+                     error_message=str(exc))
+                raise
+            save(phase="submission_unknown", error_code=exc.code,
+                 error_message=str(exc))
+            raise MineruSubmissionUncertain(
+                "The MinerU submission outcome is unknown (the request did not "
+                "complete cleanly). The document will not be submitted again "
+                "automatically.") from exc
+        except (MineruNetworkError, MineruResponseInvalid) as exc:
             # The request may have reached the provider. Never resubmit.
             save(phase="submission_unknown", error_code=exc.code,
                  error_message=str(exc))

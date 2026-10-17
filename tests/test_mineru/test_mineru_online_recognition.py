@@ -23,6 +23,7 @@ from src.core.mineru.errors import (
     MineruRecognitionFailed,
     MineruRequestRejected,
     MineruResultInvalid,
+    MineruSubmissionRejected,
     MineruSubmissionUncertain,
     MineruTimeout,
     MineruTokenMissing,
@@ -247,6 +248,52 @@ def test_an_unknown_submission_outcome_is_never_replaced(tmp_path, manager, monk
     with pytest.raises(MineruContinuationUnavailable):
         _recognize(manager, source, http=http)
     assert len(http.submitted_files()) == posts_before
+
+
+def test_a_pre_send_timeout_proves_no_request_was_issued(
+        tmp_path, manager, monkeypatch):
+    """A timeout before the POST is sent is retryable, not submission_unknown."""
+    source = build_source_pdf(tmp_path / "source.pdf", pages=1)
+    http = _http(monkeypatch, tmp_path, pages=1)
+
+    with pytest.raises(MineruTimeout):
+        _recognize(manager, source, http=http, budget=0)
+
+    assert http.requests == [], "a pre-send timeout must issue no request"
+    state = TaskRecognitionStore(manager, "trans_1").load()
+    assert state.phase == "admitted"
+    assert state.batch_id is None
+    assert state.error_code == "mineru_recognition_timeout"
+
+    # A continuation may perform the first submission: nothing was accepted.
+    result, _, _ = _recognize(manager, source, http=http)
+    assert result.page_count == 1
+    assert len(http.submitted_files()) == 1
+
+
+def test_a_rate_limited_submission_is_recorded_as_retryable(
+        tmp_path, manager, monkeypatch):
+    """HTTP 429 definitely accepted no task, so Continue may submit once more."""
+    source = build_source_pdf(tmp_path / "source.pdf", pages=1)
+    http = _http(monkeypatch, tmp_path, pages=1)
+
+    from tests.test_mineru.online_fixtures import API_BASE, response
+    http.submit_override = lambda: response(
+        f"{API_BASE}/file-urls/batch", b"busy", status=429)
+
+    with pytest.raises(MineruSubmissionRejected):
+        _recognize(manager, source, http=http)
+
+    state = TaskRecognitionStore(manager, "trans_1").load()
+    assert state.phase == "admitted"
+    assert state.batch_id is None
+    assert state.error_code == "mineru_submission_rejected"
+    assert len(http.submitted_files()) == 1
+
+    http.submit_override = None
+    result, _, _ = _recognize(manager, source, http=http)
+    assert result.page_count == 1
+    assert len(http.submitted_files()) == 2, "the rejected submission is retried once"
 
 
 def test_a_definite_provider_rejection_is_recorded(tmp_path, manager, monkeypatch):

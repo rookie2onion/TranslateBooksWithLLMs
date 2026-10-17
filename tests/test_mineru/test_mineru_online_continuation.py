@@ -1072,6 +1072,34 @@ def test_an_ambiguous_submission_stays_unknown_across_continue(web):
 # ---------------------------------------------------------------------------
 
 
+def test_a_rate_limited_submission_is_retryable_through_continue(web):
+    """A definite 429 accepted no task, so it is not submission_unknown."""
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+    from tests.test_mineru.online_fixtures import API_BASE
+
+    web.http.submit_override = lambda: response(
+        f"{API_BASE}/file-urls/batch", b"busy", status=429)
+
+    upload = web.upload(source)
+    translation_id, first = web.start_and_wait(upload)
+
+    assert first["status"] == "error", first
+    assert first["error_code"] == "mineru_submission_rejected"
+    state = web.recognition_state(translation_id)
+    assert state.phase == "admitted"
+    assert state.batch_id is None
+    assert len(_submissions(web.http)) == 1
+
+    web.http.submit_override = None
+    assert web.resume(translation_id).status_code == 200
+    second = web.wait_for_terminal(translation_id)
+
+    assert second["status"] == "completed", second
+    assert len(_submissions(web.http)) == 2, (
+        "the definitely-rejected submission is retried exactly once")
+
+
 def test_an_incomplete_upload_is_reported_as_not_automatically_continuable(web):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
     web.http.zip_bytes = result_zip_bytes(page_count=1)

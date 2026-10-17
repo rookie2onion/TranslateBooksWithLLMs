@@ -35,6 +35,7 @@ from .errors import (
     MineruRequestRejected,
     MineruResponseInvalid,
     MineruResultInvalid,
+    MineruSubmissionRejected,
     MineruTimeout,
     MineruUploadFailed,
 )
@@ -378,7 +379,13 @@ class MineruClient:
         attempts = self._max_retries + 1 if retry_safe else 1
         last_error: Optional[Exception] = None
         for attempt in range(attempts):
-            timeout = self._timeout(deadline)
+            try:
+                timeout = self._timeout(deadline)
+            except MineruTimeout as exc:
+                # Nothing was sent: the caller may classify this as retryable
+                # rather than as an ambiguous submission outcome.
+                exc.request_sent = False
+                raise
             try:
                 response = self._session.request(
                     method, url,
@@ -399,6 +406,13 @@ class MineruClient:
             if status in (401, 403):
                 raise MineruRequestRejected(
                     f"MinerU rejected the configured credentials (HTTP {status}).")
+            if status == 429 and not retry_safe:
+                # The non-idempotent submission was refused, not accepted:
+                # retrying the same task later is safe, and the outcome is
+                # known.
+                raise MineruSubmissionRejected(
+                    "MinerU temporarily rejected the submission (HTTP 429); no "
+                    "recognition task was accepted.")
             if status in (429,) or 500 <= status < 600:
                 last_error = MineruNetworkError(
                     f"MinerU temporarily rejected the request (HTTP {status}).")

@@ -103,6 +103,16 @@ class MineruSubmissionUncertain(MineruError):
     code = "mineru_submission_unknown"
 
 
+class MineruSubmissionRejected(MineruError):
+    """The provider definitely refused the submission; no task was accepted.
+
+    Unlike :class:`MineruSubmissionUncertain`, this is a pre-acceptance outcome,
+    so a later continuation may safely try the submission again.
+    """
+
+    code = "mineru_submission_rejected"
+
+
 class MineruUploadFailed(MineruError):
     """The source upload to the provider storage did not complete."""
 

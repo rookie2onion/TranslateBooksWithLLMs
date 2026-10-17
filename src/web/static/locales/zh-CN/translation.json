@@ -314,6 +314,7 @@
   "mineru_error_continuation_result_unavailable": "已保存的识别结果缺失或不再与此任务匹配。未重新上传或提交任何内容；如需再次识别，请新建任务。",
   "mineru_error_continuation_upload_unrecoverable": "之前向 MinerU 的上传未完成，且其一次性上传链接无法恢复。此任务无法自动继续；未重新提交任何内容。",
   "mineru_error_submission_unknown": "MinerU 提交结果未知。文档未被重新提交；请在新建任务前检查 MinerU。",
+  "mineru_error_submission_rejected": "MinerU 拒绝了提交，未接受任何识别任务。继续此任务可重新尝试提交。",
   "mineru_error_upload_failed": "PDF 上传到 MinerU 未完成。文档未被重新提交；请稍后新建任务。",
   "mineru_error_recognition_failed": "MinerU 无法识别此 PDF。请检查文档并新建任务。",
   "mineru_error_recognition_timeout": "在线识别在本地五分钟预算后暂停；远端 MinerU 任务可能仍在运行。继续会复用该已保存任务，不会重新上传 PDF。",

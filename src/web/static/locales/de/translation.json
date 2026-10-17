@@ -314,6 +314,7 @@
   "mineru_error_continuation_result_unavailable": "Das gespeicherte Erkennungsergebnis fehlt oder passt nicht mehr zu dieser Aufgabe. Es wurde nichts erneut hochgeladen oder übermittelt; starte eine neue Aufgabe, wenn erneut erkannt werden soll.",
   "mineru_error_continuation_upload_unrecoverable": "Der frühere Upload zu MinerU wurde nicht abgeschlossen, und sein einmaliger Upload-Link kann nicht wiederhergestellt werden. Diese Aufgabe kann nicht automatisch fortgesetzt werden; es wurde nichts erneut übermittelt.",
   "mineru_error_submission_unknown": "Das Ergebnis der Übermittlung an MinerU ist unbekannt. Das Dokument wurde nicht erneut gesendet; prüfe MinerU, bevor du eine neue Aufgabe startest.",
+  "mineru_error_submission_rejected": "MinerU hat die Übermittlung abgelehnt, ohne eine Erkennungsaufgabe anzunehmen. Setze diese Aufgabe fort, um die Übermittlung erneut zu versuchen.",
   "mineru_error_upload_failed": "Der PDF-Upload zu MinerU wurde nicht abgeschlossen. Das Dokument wurde nicht erneut gesendet; starte später eine neue Aufgabe.",
   "mineru_error_recognition_failed": "MinerU konnte diese PDF nicht erkennen. Prüfe das Dokument und starte eine neue Aufgabe.",
   "mineru_error_recognition_timeout": "Die Online-Erkennung wurde nach dem lokalen Fünf-Minuten-Budget pausiert; die entfernte MinerU-Aufgabe läuft möglicherweise weiter. Fortsetzen verwendet diese gespeicherte Aufgabe wieder, ohne die PDF erneut hochzuladen.",

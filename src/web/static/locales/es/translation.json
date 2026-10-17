@@ -314,6 +314,7 @@
   "mineru_error_continuation_result_unavailable": "El resultado de reconocimiento guardado falta o ya no coincide con esta tarea. No se volvió a subir ni a enviar nada; inicia una tarea nueva si hay que reconocer de nuevo.",
   "mineru_error_continuation_upload_unrecoverable": "La subida anterior a MinerU no se completó y su enlace de subida de un solo uso no se puede recuperar. Esta tarea no puede continuar automáticamente; no se envió nada de nuevo.",
   "mineru_error_submission_unknown": "El resultado del envío a MinerU es desconocido. El documento no se volvió a enviar; comprueba MinerU antes de iniciar una tarea nueva.",
+  "mineru_error_submission_rejected": "MinerU rechazó el envío sin aceptar ninguna tarea de reconocimiento. Continúa esta tarea para intentar el envío de nuevo.",
   "mineru_error_upload_failed": "La subida del PDF a MinerU no se completó. El documento no se volvió a enviar; inicia una tarea nueva más tarde.",
   "mineru_error_recognition_failed": "MinerU no pudo reconocer este PDF. Comprueba el documento e inicia una tarea nueva.",
   "mineru_error_recognition_timeout": "El reconocimiento en línea se pausó tras el presupuesto local de cinco minutos; la tarea remota de MinerU puede seguir en curso. Continuar reutiliza esa tarea guardada sin volver a subir el PDF.",

@@ -314,6 +314,7 @@
   "mineru_error_continuation_result_unavailable": "Le résultat de reconnaissance enregistré est absent ou ne correspond plus à cette tâche. Rien n'a été retéléversé ni soumis à nouveau ; lancez une nouvelle tâche si la reconnaissance doit être relancée.",
   "mineru_error_continuation_upload_unrecoverable": "Le téléversement précédent vers MinerU n'a pas abouti et son lien de téléversement à usage unique ne peut pas être récupéré. Cette tâche ne peut pas continuer automatiquement ; rien n'a été soumis à nouveau.",
   "mineru_error_submission_unknown": "Le résultat de la soumission à MinerU est inconnu. Le document n'a pas été soumis à nouveau ; vérifiez MinerU avant de lancer une nouvelle tâche.",
+  "mineru_error_submission_rejected": "MinerU a refusé la soumission sans accepter de tâche de reconnaissance. Continuez cette tâche pour réessayer la soumission.",
   "mineru_error_upload_failed": "Le téléversement du PDF vers MinerU n'a pas abouti. Le document n'a pas été soumis à nouveau ; relancez une nouvelle tâche plus tard.",
   "mineru_error_recognition_failed": "MinerU n'a pas pu reconnaître ce PDF. Vérifiez le document et lancez une nouvelle tâche.",
   "mineru_error_recognition_timeout": "La reconnaissance en ligne s'est mise en pause après le budget local de cinq minutes ; la tâche MinerU distante peut continuer. Continuer réutilise cette tâche enregistrée sans retéléverser le PDF.",

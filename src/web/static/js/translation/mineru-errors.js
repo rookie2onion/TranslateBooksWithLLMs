@@ -24,6 +24,7 @@ const KNOWN_CODES = new Set([
     'mineru_continuation_result_unavailable',
     'mineru_continuation_upload_unrecoverable',
     'mineru_submission_unknown',
+    'mineru_submission_rejected',
     'mineru_upload_failed',
     'mineru_recognition_failed',
     'mineru_recognition_timeout',

@@ -78,6 +78,7 @@ NEW_KEYS = [
     "mineru_error_continuation_result_unavailable",
     "mineru_error_continuation_upload_unrecoverable",
     "mineru_error_submission_unknown",
+    "mineru_error_submission_rejected",
     "mineru_error_upload_failed",
     "mineru_error_recognition_failed",
     "mineru_error_recognition_timeout",
