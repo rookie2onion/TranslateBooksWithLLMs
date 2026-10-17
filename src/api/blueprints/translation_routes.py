@@ -1,32 +1,71 @@
 """
 Translation job management routes
 """
+import copy
 import logging
 import os
 import re
 import time
-import copy
 from pathlib import Path
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
 
 import src.config as _config
-from src.api.services.path_validator import PathValidator
+from src.api.api_keys import USE_ENV_SENTINEL
+from src.api.api_keys import provider_env_var as _provider_env_var
+from src.api.api_keys import resolve_api_key as _resolve_api_key
 from src.api.services.endpoint_validator import EndpointValidator
+from src.api.services.path_validator import PathValidator
 from src.config import (
-    REQUEST_TIMEOUT,
-    OLLAMA_NUM_CTX,
     AUTO_PAUSE_ON_RATE_LIMIT,
-    PARALLEL_TRANSLATIONS,
     MAX_PARALLEL_TRANSLATIONS,
+    OLLAMA_NUM_CTX,
+    PARALLEL_TRANSLATIONS,
+    REQUEST_TIMEOUT,
 )
+from src.core.mineru.admission import admit_pdf_source
+from src.core.mineru.errors import MineruError
+from src.core.pdf.accounting import read_accounting_summary
 from src.tts.tts_config import TTSConfig
-from src.api.api_keys import (
-    resolve_api_key as _resolve_api_key,
-    provider_env_var as _provider_env_var,
-    USE_ENV_SENTINEL,
-)
 
 logger = logging.getLogger('translation_routes')
+
+
+# Short English labels pairing each typed recognition failure with its stable
+# code. The Web interface resolves the code into a localized message; the label
+# is a developer/API fallback, never a credential or a provider URL.
+_MINERU_ERROR_LABELS = {
+    "mineru_authorization_required": "MinerU upload authorization required",
+    "mineru_token_missing": "MinerU is not configured",
+    "mineru_pdf_unreadable": "PDF cannot be read",
+    "mineru_pdf_encrypted": "PDF is password-protected",
+    "mineru_page_limit": "PDF exceeds the recognition page limit",
+    "mineru_byte_limit": "PDF exceeds the recognition size limit",
+}
+
+
+def _admit_pdf_request(safe_path, data):
+    """Validate a PDF task request at the server boundary.
+
+    Requires the task's explicit upload authorization, a configured MinerU
+    token and a readable, unencrypted PDF within the recognition limits. All
+    checks run before a job (and therefore any provider request) can exist.
+
+    Returns a Flask (response, status) tuple to abort with, or None on success.
+    """
+    authorized = data.get('mineru_authorized') is True
+    try:
+        admit_pdf_source(
+            safe_path,
+            authorized=authorized,
+            token=_config.mineru_api_token(),
+        )
+    except MineruError as exc:
+        payload = {"error": _MINERU_ERROR_LABELS.get(exc.code, "PDF recognition rejected")}
+        payload.update(exc.to_payload())
+        logger.warning("Rejected PDF translation request (%s): %s", exc.code, exc.message)
+        return jsonify(payload), 400
+    return None
 
 
 def _clamp_parallel_workers(value):
@@ -423,9 +462,28 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             )
             if path_error is not None:
                 return jsonify({"error": path_error}), 403
+            requested_type = data['file_type']
+            if requested_type == 'pdf' or safe_path.suffix.lower() == '.pdf':
+                # PDF recognition is online-only and uploads the document to a
+                # third party: this is the server-side half of the explicit
+                # per-task authorization boundary (the core submission path
+                # checks it again). Selecting/uploading a file never grants it.
+                admission_error = _admit_pdf_request(safe_path, data)
+                if admission_error is not None:
+                    return admission_error
+                config['mineru_authorized'] = True
+                config['file_type'] = 'pdf'
+            else:
+                config['file_type'] = requested_type
             config['file_path'] = str(safe_path)
-            config['file_type'] = data['file_type']
         else:
+            if data.get('file_type') == 'pdf':
+                return jsonify({
+                    "error": "PDF translation requires an uploaded PDF file",
+                    "code": "mineru_pdf_unreadable",
+                    "message": ("A PDF cannot be translated from inline text. "
+                                "Upload the PDF first."),
+                }), 400
             config['text'] = data['text']
             config['file_type'] = data.get('file_type', 'txt')
 
@@ -490,6 +548,7 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         else:
             elapsed = stats.get('elapsed_time', time.time() - stats.get('start_time', time.time()))
 
+        output_path = job_data.get('output_filepath')
         return jsonify({
             "translation_id": translation_id,
             "status": job_data.get('status'),
@@ -499,13 +558,22 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
                 'completed_chunks': stats.get('completed_chunks', 0),
                 'failed_chunks': stats.get('failed_chunks', 0),
                 'start_time': stats.get('start_time'),
-                'elapsed_time': elapsed
+                'elapsed_time': elapsed,
+                # Set while online recognition is in flight, so queued/
+                # submitted recognition is not mistaken for translation.
+                'recognition_phase': stats.get('recognition_phase'),
             },
             "logs": job_data.get('logs', [])[-100:],
             "result_preview": "[Preview functionality removed. Download file to view content.]" if job_data.get('status') in ['completed', 'interrupted', 'partial'] else None,
             "error": job_data.get('error'),
+            # Stable category for localized UI text; never the raw provider
+            # prose and never a credential or signed URL.
+            "error_code": job_data.get('error_code'),
+            # What actually completed, read from the durable sidecar next to the
+            # output. None until a validated PDF exists.
+            "accounting": read_accounting_summary(output_path) if output_path else None,
             "config": _strip_api_keys(dict(job_data['config'])) if job_data.get('config') else None,
-            "output_filepath": job_data.get('output_filepath')
+            "output_filepath": output_path
         })
 
     @bp.route('/api/translation/<translation_id>/interrupt', methods=['POST'])

@@ -137,6 +137,24 @@ export function resolveOperationLabel(stats) {
     // translate a document that has not been chunked.
     if (stats.auto_prep_active) return t('translation:preparing_auto');
 
+    // Online PDF recognition also runs before the first chunk exists. Naming
+    // the phase is what keeps a queued/submitted recognition from looking like
+    // a stuck translation (issue #20).
+    if (stats.recognition_phase) {
+        switch (stats.recognition_phase) {
+            case 'submitting':
+            case 'uploading':
+                return t('translation:uploading_for_recognition');
+            case 'downloading':
+            case 'validating':
+                return t('translation:preparing_translation');
+            case 'reused':
+                return t('translation:reusing_recognition');
+            default:
+                return t('translation:recognizing_online');
+        }
+    }
+
     if (stats.enable_refinement) {
         return stats.current_phase === 2
             ? t('translation:refining_step', { step: 2, total: 2, defaultValue: 'Refining (2/2)' })
@@ -150,6 +168,11 @@ export function resolveOperationLabel(stats) {
     return t('translation:translating');
 }
 
+// Last stats payload rendered, so the operation label can be re-resolved in the
+// new locale without waiting for the next server tick (the label is JS-owned and
+// therefore invisible to applyToDOM's data-i18n pass).
+let _lastOperationStats = null;
+
 /**
  * Update the operation label inside the current-file title without rebuilding
  * the surrounding DOM (icon, filename, languages). The element is created by
@@ -159,6 +182,7 @@ export function resolveOperationLabel(stats) {
  * @param {Object} stats - Server stats
  */
 function updateOperationLabel(stats) {
+    _lastOperationStats = stats || null;
     const labelEl = DomHelpers.getElement('progressOperationLabel');
     if (!labelEl) return;
 
@@ -184,6 +208,10 @@ function updateOperationLabel(stats) {
         labelEl.appendChild(spinner);
     }
 }
+
+// The operation label is imperative text (no data-i18n marker), so a language
+// switch must repaint it explicitly from the last known stats.
+window.addEventListener('localeChanged', () => updateOperationLabel(_lastOperationStats));
 
 // The Fallbacks card has a single active state — "critical" (red). Any
 // fallback at all is treated as critical because placeholder loss already
@@ -592,6 +620,7 @@ export const ProgressManager = {
      * Reset progress display to initial state
      */
     reset() {
+        _lastOperationStats = null;
         updateProgressBar(0);
         DomHelpers.setText('totalChunks', '0');
         DomHelpers.setText('completedChunks', '0');

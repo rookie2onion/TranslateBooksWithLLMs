@@ -9,6 +9,7 @@ import { StateManager } from '../core/state-manager.js';
 import { ApiClient } from '../core/api-client.js';
 import { MessageLogger } from '../ui/message-logger.js';
 import { DomHelpers } from '../ui/dom-helpers.js';
+import { resolveMineruError } from './mineru-errors.js';
 import { StatusManager } from '../utils/status-manager.js';
 import { FileUpload } from '../files/file-upload.js';
 import { FileActions } from '../files/file-actions.js';
@@ -617,8 +618,12 @@ export const TranslationTracker = {
             this.updateActiveTranslationsState();
         } else if (data.status === 'error') {
             MessageLogger.resetProgressTracking();
+            // A typed online-recognition/output failure carries a stable code;
+            // render it in the active UI language instead of the English prose
+            // the server logs for developers.
+            const localizedFailure = resolveMineruError(data.error_code);
             this.finishCurrentFileTranslation(
-                t('translation:translation_error_msg', { name: currentFile.name, error: data.error || t('translation:translation_unknown_error') }),
+                t('translation:translation_error_msg', { name: currentFile.name, error: localizedFailure || data.error || t('translation:translation_unknown_error') }),
                 'error',
                 data
             );

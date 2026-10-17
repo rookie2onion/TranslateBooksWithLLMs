@@ -5,11 +5,12 @@ Checkpoint manager for translation job persistence and resume functionality.
 import os
 import re
 import shutil
-from typing import Optional, Dict, List, Any, Tuple
 from pathlib import Path
-from .database import Database
+from typing import Any, Dict, List, Optional, Tuple
+
 from src.utils.security import SecurityError, resolve_within, safe_extract_zip
 
+from .database import Database
 
 # Uploaded files are stored as "<16 hex chars>_<original name>"; the prefix is
 # an implementation detail that must never reach the user interface.
@@ -27,18 +28,52 @@ class CheckpointManager:
     and file storage for uploaded files.
     """
 
-    def __init__(self, db_path: str = "data/jobs.db", server_session_id: Optional[str] = None):
+    def __init__(self, db_path: str = "data/jobs.db", server_session_id: Optional[str] = None,
+                 uploads_dir: Optional[Path] = None):
         """
         Initialize checkpoint manager.
 
         Args:
             db_path: Path to SQLite database
             server_session_id: Unique identifier for the current server session
+            uploads_dir: Directory holding each job's preserved input and working
+                data. Defaults to ``data/uploads``; tests pass a temporary
+                directory so they never touch the repository's job data.
         """
         self.db = Database(db_path)
-        self.uploads_dir = Path("data/uploads")
+        self.uploads_dir = Path(uploads_dir) if uploads_dir is not None else Path("data/uploads")
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.server_session_id = server_session_id
+
+    # -- Task-owned recognition state (MinerU online PDF translation) --------
+    #
+    # The durable record of an online recognition attempt lives with the job's
+    # other working data, so it follows the existing deletion/pruning/startup
+    # cleanup lifecycle instead of creating a second store.
+
+    def recognition_dir(self, translation_id: str) -> Path:
+        """Directory holding this job's recognition state and downloaded result."""
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', translation_id or ''):
+            raise ValueError("Invalid translation id for recognition state")
+        return self.uploads_dir / translation_id / "recognition"
+
+    def save_recognition_state(self, translation_id: str, state) -> Path:
+        """Atomically persist one validated recognition state snapshot."""
+        from src.core.mineru.recognition_state import write_state
+
+        return write_state(self.recognition_dir(translation_id), state)
+
+    def load_recognition_state(self, translation_id: str):
+        """Load the recorded recognition state, or None for a task without one."""
+        from src.core.mineru.recognition_state import read_state
+
+        return read_state(self.recognition_dir(translation_id))
+
+    def delete_recognition_state(self, translation_id: str) -> None:
+        """Remove only the recorded recognition state file."""
+        from src.core.mineru.recognition_state import delete_state
+
+        delete_state(self.recognition_dir(translation_id))
 
     def start_job(
         self,
@@ -419,8 +454,8 @@ class CheckpointManager:
 
         # Get all job IDs and preserved file paths from database
         try:
-            import sqlite3
             import json
+            import sqlite3
             conn = sqlite3.connect(self.db.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -628,6 +663,7 @@ class CheckpointManager:
         """
         # Use the new adapter-based reconstruction
         import asyncio
+
         from src.core.adapters import build_translated_output as adapter_build_output
 
         try:
@@ -753,6 +789,7 @@ class CheckpointManager:
             try:
                 import tempfile
                 import zipfile
+
                 from lxml import etree
 
                 # Create temporary directory for reconstruction
@@ -922,8 +959,8 @@ class CheckpointManager:
         Returns:
             True if saved successfully
         """
-        from datetime import datetime
         import json
+        from datetime import datetime
 
         state_file = self._xhtml_state_path(translation_id, file_href)
         state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -972,6 +1009,7 @@ class CheckpointManager:
             XHTMLTranslationState instance or None if not found
         """
         import json
+
         from src.core.epub.xhtml_translation_state import XHTMLTranslationState
 
         state_file = self._xhtml_state_path(translation_id, file_href)

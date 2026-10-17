@@ -1,32 +1,34 @@
 """
 Translation job handlers and processing logic
 """
-import os
-import re
-import time
 import asyncio
 import logging
+import os
+import re
 import tempfile
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from src.utils.unified_logger import setup_web_logger, LogType
-from src.utils.file_utils import get_unique_output_path, find_partial_output_paths, generate_tts_for_translation
-from src.utils.custom_instructions import (
-    load_custom_instructions,
-    is_safe_filename,
-)
+from src.config import AUTO_PAUSE_ON_RATE_LIMIT, RATE_LIMIT_AUTO_RESUME_DELAY
 from src.core import auto_prep
+from src.core.adapters import refine_file, translate_file
 from src.core.llm import OpenRouterProvider
 from src.core.llm.exceptions import RateLimitError
 from src.core.llm_client import create_llm_client
-from src.config import AUTO_PAUSE_ON_RATE_LIMIT, RATE_LIMIT_AUTO_RESUME_DELAY
-from src.core.adapters import translate_file, refine_file
 from src.core.progress import snapshot_from_legacy_stats
 from src.tts.tts_config import TTSConfig
-from src.utils.notifier import notify, EVENT_SUCCESS, EVENT_FAILURE, EVENT_INTERRUPTION
+from src.utils.custom_instructions import is_safe_filename, load_custom_instructions
+from src.utils.file_utils import (
+    find_partial_output_paths,
+    generate_tts_for_translation,
+    get_unique_output_path,
+)
+from src.utils.notifier import EVENT_FAILURE, EVENT_INTERRUPTION, EVENT_SUCCESS, notify
+from src.utils.unified_logger import LogType, setup_web_logger
+
 from .completion_status import classify_completion
 from .websocket import emit_update
 
@@ -408,7 +410,7 @@ def resolve_output_path(output_dir, output_filename, is_resume):
 def run_translation_async_wrapper(translation_id, config, state_manager, output_dir, socketio):
     """
     Wrapper for running translation in async context
-    
+
     Args:
         translation_id (str): Translation job ID
         config (dict): Translation configuration
@@ -438,7 +440,7 @@ def run_translation_async_wrapper(translation_id, config, state_manager, output_
 async def perform_actual_translation(translation_id, config, state_manager, output_dir, socketio):
     """
     Perform the actual translation job
-    
+
     Args:
         translation_id (str): Translation job ID
         config (dict): Translation configuration
@@ -468,7 +470,7 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         state_manager.set_translation_field(translation_id, 'logs', logs)
         # Send full log entry for structured processing on client side
         emit_update(socketio, translation_id, {'log': log_entry['message'], 'log_entry': log_entry}, state_manager)
-    
+
     def storage_callback(log_entry):
         """Callback for storing logs"""
         logs = state_manager.get_translation_field(translation_id, 'logs')
@@ -476,15 +478,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             logs = []
         logs.append(log_entry)
         state_manager.set_translation_field(translation_id, 'logs', logs)
-    
+
     logger = setup_web_logger(web_callback, storage_callback)
-    
+
     def _log_message_callback(message_key_from_translate_module, message_content="", data=None):
         """Legacy callback wrapper for backward compatibility"""
         # Skip debug messages for web interface
         if message_key_from_translate_module in ["llm_prompt_debug", "llm_raw_response_preview"]:
             return
-        
+
         # Handle structured data from new logging system
         if data and isinstance(data, dict):
             log_type = data.get('type')
@@ -575,6 +577,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         # makes the header read "Preparing…" instead of a frozen "Translating
         # 0/0", and each emit refreshes elapsed_time so the panel stays alive.
         _emit_progress({}, {'auto_prep_active': bool(active)})
+
+    def _recognition_progress_callback(phase):
+        # Online recognition runs before the first chunk exists too. Naming the
+        # phase keeps "submitted/recognizing/downloading" from being mistaken
+        # for translation progress; once validated, the flag is cleared so the
+        # normal translation label takes over.
+        _emit_progress({}, {
+            'recognition_phase': None if phase in ('validated', 'reused') else phase,
+        })
 
     def _openrouter_cost_callback(cost_data):
         """Update OpenRouter cost in state. No emit: this callback runs on the
@@ -809,7 +820,12 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 # with approximate tag positions. Set only by the resume
                 # endpoint, from the completion card's explicit action; absent
                 # (hence False) on every normal run and every normal resume.
-                retry_token_aligned=bool(config.get('retry_token_aligned', False))
+                retry_token_aligned=bool(config.get('retry_token_aligned', False)),
+                # PDF only. The task's explicit MinerU upload authorization is
+                # re-checked at the core submission boundary; a resumed job
+                # carries the authorization recorded with its own source.
+                mineru_authorized=bool(config.get('mineru_authorized', False)),
+                recognition_progress_callback=_recognition_progress_callback,
             )
 
             # Optional chained refinement pass on the translated output.
@@ -1207,15 +1223,27 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         tb_str = traceback.format_exc()
         _log_message_callback("critical_error_perform_task_traceback", tb_str)
 
+        # Typed recognition/output failures carry a stable code so the Web UI
+        # can show a localized, actionable message instead of parsing English
+        # provider prose. Never a credential or signed URL.
+        error_code = getattr(e, 'code', None)
+        if not isinstance(error_code, str):
+            error_code = None
+
         if state_manager.exists(translation_id):
             state_manager.set_translation_field(translation_id, 'status', 'error')
             state_manager.set_translation_field(translation_id, 'error', critical_error_msg)
+            if error_code:
+                state_manager.set_translation_field(translation_id, 'error_code', error_code)
 
-            emit_update(socketio, translation_id, {
+            error_payload = {
                 'error': critical_error_msg,
                 'status': 'error',
                 'result': state_manager.get_translation_field(translation_id, 'result') or f"Translation failed: {critical_error_msg}"
-            }, state_manager)
+            }
+            if error_code:
+                error_payload['error_code'] = error_code
+            emit_update(socketio, translation_id, error_payload, state_manager)
 
             stats = state_manager.get_translation_field(translation_id, 'stats') or {}
             elapsed_time = time.time() - stats.get('start_time', time.time())

@@ -11,15 +11,16 @@ File type detection supports:
 """
 
 import os
-from typing import Optional, Callable, Dict, Any
 from pathlib import Path
+from typing import Any, Callable, Dict, Optional
 
-from .generic_translator import GenericTranslator
-from .txt_adapter import TxtAdapter
-from .srt_adapter import SrtAdapter
+from src.utils.file_detector import detect_file_type, detect_file_type_by_content
+
 from .epub_adapter import EpubAdapter
 from .exceptions import UnsupportedFormatError
-from src.utils.file_detector import detect_file_type, detect_file_type_by_content
+from .generic_translator import GenericTranslator
+from .srt_adapter import SrtAdapter
+from .txt_adapter import TxtAdapter
 
 
 def _ensure_checkpoint_job(
@@ -84,6 +85,9 @@ async def translate_file(
     bilingual_output: bool = False,
     parallel_workers: int = 1,
     retry_token_aligned: bool = False,
+    mineru_authorized: bool = False,
+    recognition_progress_callback: Optional[Callable[[str], None]] = None,
+    recognition_budget_seconds: float = 300.0,
     **additional_config
 ) -> bool:
     """
@@ -123,6 +127,13 @@ async def translate_file(
             chunks token alignment translated with approximate tag positions.
             Off by default and ignored by every other format: those chunks are
             translated, and no automatic pass ever revisits them (D3).
+        mineru_authorized: PDF only. The task's explicit MinerU upload
+            authorization, validated again at the core submission boundary.
+        recognition_progress_callback: PDF only. Called with the online
+            recognition phase name so the job progress can distinguish
+            recognition from translation and output generation.
+        recognition_budget_seconds: PDF only. Local recognition budget
+            (five minutes by default).
         **additional_config: Additional configuration passed to the adapter
 
     Returns:
@@ -161,7 +172,7 @@ async def translate_file(
 
     # Resolve concurrent workers once here; local providers are forced to 1.
     # Every downstream pipeline re-resolves idempotently.
-    from src.config import resolve_parallel_workers, is_local_provider
+    from src.config import is_local_provider, resolve_parallel_workers
     requested_workers = parallel_workers
     parallel_workers = resolve_parallel_workers(llm_provider, parallel_workers)
     if log_callback:
@@ -295,8 +306,8 @@ async def translate_file(
     # PDF translation: extractor + plain-text pipeline + reflowed PDF builder.
     # Same shape as the DOCX branch above; PDF always runs in plain-text mode.
     if detected_type == 'pdf':
-        from src.core.pdf.translator import translate_pdf_file
         from src.core.llm import create_llm_provider
+        from src.core.pdf.translator import translate_pdf_file
 
         # Create LLM client
         llm_client = create_llm_provider(
@@ -327,7 +338,10 @@ async def translate_file(
             check_interruption_callback=check_interruption_callback,
             checkpoint_manager=checkpoint_manager,
             translation_id=translation_id,
-            parallel_workers=parallel_workers
+            parallel_workers=parallel_workers,
+            mineru_authorized=mineru_authorized,
+            recognition_progress_callback=recognition_progress_callback,
+            recognition_budget_seconds=recognition_budget_seconds,
         )
         return result.get('success', False)
 

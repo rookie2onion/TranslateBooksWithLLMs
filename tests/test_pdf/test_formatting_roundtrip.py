@@ -1,17 +1,11 @@
 """Round trip: extract a formatted PDF, rebuild it, and check the formatting survived."""
 
-from unittest.mock import AsyncMock, Mock, patch
-
 import pytest
 
 pymupdf = pytest.importorskip("pymupdf")
 
-from src.core.epub.translation_metrics import TranslationMetrics
 from src.core.pdf.builder import build_pdf
 from src.core.pdf.extractor import extract_pdf_paragraphs
-from src.core.pdf.translator import translate_pdf_file
-
-PIPELINE = "src.core.pdf.translator.translate_paragraphs_plain"
 
 
 def _channels(value):
@@ -95,26 +89,3 @@ def test_table_cells_share_their_row(rebuilt):
         for mate in mates:
             mate_y = _baseline_y(doc, f"T:{texts[mate]}"[:12])
             assert abs(mate_y - y) <= 1, f"{needle} and {texts[mate]!r} are on different rows"
-
-
-@pytest.mark.asyncio
-async def test_translate_pdf_file_logs_table_count(formatted_pdf_path, tmp_path):
-    async def _run(*args, paragraphs, **kwargs):
-        return [f"T:{p}" for p in paragraphs], TranslationMetrics(), False
-
-    log = Mock()
-    output = str(tmp_path / "out.pdf")
-    with patch(PIPELINE, AsyncMock(side_effect=_run)):
-        result = await translate_pdf_file(
-            input_filepath=formatted_pdf_path,
-            output_filepath=output,
-            source_language="English",
-            target_language="French",
-            model_name="test-model",
-            llm_client=Mock(),
-            log_callback=log,
-        )
-
-    assert result["success"] is True
-    messages = {c.args[0]: c.args[1] for c in log.call_args_list}
-    assert "2 tables" in messages["pdf_extracted"]

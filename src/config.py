@@ -1,12 +1,13 @@
 """
 Centralized configuration class
 """
+import logging
 import os
 import sys
-import logging
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+
 from dotenv import load_dotenv
 
 # Setup debug logger for configuration
@@ -475,6 +476,17 @@ OUTPUT_DIR = str(Path(os.getenv('OUTPUT_DIR', 'translated_files')).expanduser().
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
 
 
+def mineru_api_token():
+    """Resolve the MinerU account token from the existing environment mechanism.
+
+    Read at call time (like every other .env value) so ``reload_config()`` and a
+    process-level environment variable are both honoured. The value is never
+    logged, persisted in a job config, forwarded to storage requests or exposed
+    to the browser.
+    """
+    return (os.getenv('MINERU_API_TOKEN') or '').strip()
+
+
 def reload_config():
     """Re-read .env and refresh runtime-mutable settings.
 
@@ -702,13 +714,13 @@ DEFAULT_CONTEXT_FALLBACK = 2048
 @dataclass
 class TranslationConfig:
     """Unified configuration for both CLI and web interfaces"""
-    
+
     # Core settings
     source_language: str = DEFAULT_SOURCE_LANGUAGE
     target_language: str = DEFAULT_TARGET_LANGUAGE
     model: str = DEFAULT_MODEL
     api_endpoint: str = API_ENDPOINT
-    
+
     # LLM Provider settings
     llm_provider: str = LLM_PROVIDER
     gemini_api_key: str = GEMINI_API_KEY

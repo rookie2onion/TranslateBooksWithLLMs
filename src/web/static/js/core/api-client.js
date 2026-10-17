@@ -44,7 +44,15 @@ async function handleApiError(response) {
     const label = errorData.error || '';
     const detail = errorData.message || '';
     const parts = [label, detail !== label ? detail : ''].filter(Boolean);
-    throw new Error(parts.join(' — ') || `Request failed with status ${response.status}`);
+    const error = new Error(parts.join(' — ') || `Request failed with status ${response.status}`);
+    // Stable machine-readable category (e.g. a typed PDF recognition failure)
+    // so callers can render a localized message instead of parsing English prose.
+    error.code = typeof errorData.code === 'string' ? errorData.code : null;
+    error.limits = errorData.limits && typeof errorData.limits === 'object'
+        ? errorData.limits
+        : null;
+    error.status = response.status;
+    throw error;
 }
 
 /**
@@ -784,4 +792,3 @@ export const ApiClient = {
         });
     }
 };
-
