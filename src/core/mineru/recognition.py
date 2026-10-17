@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
+from src.utils.hashing import sha256_file
+
 from .admission import (
     MAX_BYTES,
     MAX_PAGES,
@@ -57,6 +59,7 @@ from .errors import (
     MineruRequestRejected,
     MineruResponseInvalid,
     MineruResultInvalid,
+    MineruSubmissionRejected,
     MineruSubmissionUncertain,
     MineruTimeout,
     MineruTokenMissing,
@@ -458,7 +461,25 @@ def _run_submission(
         except MineruRequestRejected as exc:
             save(phase="rejected", error_code=exc.code, error_message=str(exc))
             raise
-        except (MineruNetworkError, MineruResponseInvalid, MineruTimeout) as exc:
+        except MineruSubmissionRejected as exc:
+            # The provider definitely accepted no task: a later continuation
+            # may safely try the submission again.
+            save(phase="admitted", error_code=exc.code, error_message=str(exc))
+            raise
+        except MineruTimeout as exc:
+            if getattr(exc, "request_sent", True) is False:
+                # The deadline elapsed before the request left the process.
+                # This is a local pause, not an ambiguous remote outcome.
+                save(phase="admitted", error_code=exc.code,
+                     error_message=str(exc))
+                raise
+            save(phase="submission_unknown", error_code=exc.code,
+                 error_message=str(exc))
+            raise MineruSubmissionUncertain(
+                "The MinerU submission outcome is unknown (the request did not "
+                "complete cleanly). The document will not be submitted again "
+                "automatically.") from exc
+        except (MineruNetworkError, MineruResponseInvalid) as exc:
             # The request may have reached the provider. Never resubmit.
             save(phase="submission_unknown", error_code=exc.code,
                  error_message=str(exc))
@@ -558,10 +579,10 @@ def _poll_download_validate(
 
     _notify(progress, "validating")
     save(phase="validating")
-    if _sha256_file(admitted.path) != admitted.sha256:
+    if sha256_file(admitted.path) != admitted.sha256:
         message = ("The source PDF changed during recognition, so the "
                    "returned result cannot be accepted.")
-        save(error_code="mineru_result_invalid", error_message=message)
+        save(error_code=MineruResultInvalid.code, error_message=message)
         raise MineruResultInvalid(message)
     try:
         return build_online_result(
@@ -591,7 +612,7 @@ def _poll_until_done(
             message = ("Local recognition was stopped. The remote MinerU task "
                        "may continue; this is not remote cancellation.")
             save(phase="interrupted_local",
-                 error_code="mineru_recognition_interrupted",
+                 error_code=MineruInterrupted.code,
                  error_message=message)
             raise MineruInterrupted(message)
         if clock() >= deadline:
@@ -637,7 +658,7 @@ def _raise_timeout(save: Callable[..., RecognitionState]) -> None:
     message = ("The local five-minute recognition budget elapsed. The remote "
                "MinerU task may continue, but this attempt did not complete and "
                "will not be reported as successful.")
-    save(phase="timed_out", error_code="mineru_recognition_timeout",
+    save(phase="timed_out", error_code=MineruTimeout.code,
          error_message=message)
     raise MineruTimeout(message)
 
@@ -664,13 +685,6 @@ def _result(admitted: AdmittedSource, source: SourceContent, online: OnlineResul
 
 def _data_id(admitted: AdmittedSource) -> str:
     return f"{_DATA_ID_PREFIX}{admitted.sha256[:20]}"
-
-
-def _sha256_file(path: Path) -> str:
-    import hashlib
-
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _notify(callback: Optional[Callable[[str], None]], phase: str) -> None:

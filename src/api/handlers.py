@@ -991,11 +991,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             # Mark checkpoint as interrupted in database
             checkpoint_manager.mark_interrupted(translation_id)
 
-            # Emit checkpoint_created event to trigger UI update
+            # Emit checkpoint_created event to trigger UI update. The browser
+            # resolves the locale key; the server never ships English prose.
             socketio.emit('checkpoint_created', {
                 'translation_id': translation_id,
                 'status': 'interrupted',
-                'message': 'Translation paused - checkpoint created'
+                'message_key': 'common:checkpoint_translation_paused',
+                'message_params': {
+                    'name': config.get('output_filename') or translation_id,
+                },
             }, namespace='/')
 
             # DON'T clean up uploaded file on interruption - keep it for resume capability
@@ -1127,16 +1131,19 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                     checkpoint_manager.prune_job_data(translation_id)
 
                 # Publish the completion payload first, then make the terminal
-                # status observable. A status poller can therefore never see a
-                # completed job whose accounting payload has not been emitted
-                # yet, and the completion card can render the durable counters
-                # immediately. Both calls are synchronous: no await separates
-                # them.
-                emit_update(socketio, translation_id, final_status_payload,
-                            state_manager)
-                state_manager.set_translation_field(
-                    translation_id, 'status', 'completed')
-                payload_emitted = True
+                # status observable, for PDF jobs only: the whole-book
+                # completion card must never be observed against a job whose
+                # payload has not been emitted yet. Every other format keeps
+                # its historical ordering (status first, payload at the end).
+                if config.get('file_type') == 'pdf':
+                    emit_update(socketio, translation_id, final_status_payload,
+                                state_manager)
+                    state_manager.set_translation_field(
+                        translation_id, 'status', 'completed')
+                    payload_emitted = True
+                else:
+                    state_manager.set_translation_field(
+                        translation_id, 'status', 'completed')
                 await asyncio.to_thread(notify, EVENT_SUCCESS,
                     _notification_context(config, translation_id, elapsed_time))
 
@@ -1303,7 +1310,10 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         socketio.emit('checkpoint_created', {
             'translation_id': translation_id,
             'status': 'rate_limited',
-            'message': pause_msg
+            'message_key': 'common:checkpoint_rate_limited',
+            'message_params': {
+                'name': config.get('output_filename') or translation_id,
+            },
         }, namespace='/')
 
         output_filepath = state_manager.get_translation_field(translation_id, 'output_filepath')
@@ -1346,7 +1356,13 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         socketio.emit('checkpoint_created', {
             'translation_id': translation_id,
             'status': 'interrupted',
-            'message': 'Recognition paused locally; the saved MinerU task can be continued',
+            # The browser resolves this key through t() at render time, so the
+            # log line follows a language switch instead of freezing the
+            # server's English wording.
+            'message_key': 'common:checkpoint_recognition_paused',
+            'message_params': {
+                'name': config.get('output_filename') or translation_id,
+            },
         }, namespace='/')
 
     except Exception as e:
@@ -1368,10 +1384,12 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             state_manager.set_translation_field(translation_id, 'error', critical_error_msg)
             if error_code:
                 state_manager.set_translation_field(translation_id, 'error_code', error_code)
-            # The job's recovery data is deliberately retained: mark the row
+            # PDF recovery data is deliberately retained: mark the row
             # resumable now instead of leaving it 'running' until a restart
             # sweeps it (the task-owned recognition files are the way back).
-            checkpoint_manager.mark_error(translation_id)
+            # Other formats keep their historical startup-sweep behavior.
+            if config.get('file_type') == 'pdf':
+                checkpoint_manager.mark_error(translation_id)
 
             error_payload = {
                 'error': critical_error_msg,

@@ -16,8 +16,7 @@ import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from src.core.chunking.token_chunker import TokenChunker
-from src.core.translator import generate_translation_request
-from src.core.post_processor import clean_translated_text
+from src.core.common.parallel import aclosing, iter_ordered_concurrent
 from src.core.epub.translation_metrics import TranslationMetrics
 from src.core.epub.xhtml_translation_state import (
     CHUNK_PENDING,
@@ -25,10 +24,10 @@ from src.core.epub.xhtml_translation_state import (
     CHUNK_UNTRANSLATED,
     unfinished_chunk_indices,
 )
-from src.core.common.parallel import aclosing, iter_ordered_concurrent
 from src.core.llm.exceptions import RateLimitError
+from src.core.post_processor import clean_translated_text
+from src.core.translator import generate_translation_request
 from src.prompts.prompts import PLAIN_TEXT_EXPECTED_PARAGRAPHS_OPTION
-
 
 PARAGRAPH_SEPARATOR = "\n\n"
 _RESPLIT_REGEX = re.compile(r"\n{2,}")
@@ -771,7 +770,13 @@ async def translate_paragraphs_plain(
                     if sequential and i >= len(prefix):
                         previous_translation_context = _context_tail(cleaned)
 
-            stats.record_processed()
+            # The restored prefix was already counted by resume_stats (or by
+            # the restoration loop above). A retried segment inside it must not
+            # increment processed_chunks again, or the completed count can
+            # exceed total_chunks. Only segments delivered for the first time
+            # advance the progress counter.
+            if i >= len(prefix):
+                stats.record_processed()
             if stats_callback:
                 stats_callback(stats.to_dict())
             delivered += 1

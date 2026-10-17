@@ -67,6 +67,9 @@
   "state_desync_syncing": "Detected state desync: job {{status}} on server but UI still active. Syncing...",
   "translation_job_missing": "Translation job no longer exists on server. Resetting UI.",
   "checkpoint_created_default": "Checkpoint created",
+  "checkpoint_recognition_paused": "Recognition for {{name}} paused locally. The saved MinerU task can be continued without uploading the PDF again.",
+  "checkpoint_translation_paused": "Translation for {{name}} paused; checkpoint created.",
+  "checkpoint_rate_limited": "Translation for {{name}} paused after a rate limit; checkpoint created.",
 
   "sending": "Sending...",
   "test_sent_default": "Test sent.",

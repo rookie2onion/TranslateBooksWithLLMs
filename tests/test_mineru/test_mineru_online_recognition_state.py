@@ -74,7 +74,7 @@ def test_state_is_replaced_atomically(manager, monkeypatch):
     def explode(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(state_module, "dump_json_atomic", explode)
+    monkeypatch.setattr(state_module, "write_json_atomic", explode)
     with pytest.raises(MineruStateUnavailable):
         manager.save_recognition_state("trans_1", _state(phase="recognizing"))
 

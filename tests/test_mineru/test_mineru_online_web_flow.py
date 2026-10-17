@@ -45,9 +45,12 @@ class _FakeSocketIO:
 
     def __init__(self):
         self.events = []
+        self.on_emit = None
 
     def emit(self, event, data=None, namespace=None, **kwargs):
         self.events.append((event, data, namespace))
+        if self.on_emit is not None:
+            self.on_emit(event, data, namespace)
 
 
 @pytest.fixture
@@ -63,13 +66,19 @@ def web(tmp_path, monkeypatch):
         checkpoint_manager=checkpoint_manager, server_session_id=str(int(time.time())))
     auth_state = api_auth.API_TOKEN
 
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        template_folder=str(
+            Path(__file__).resolve().parents[2] / "src" / "web" / "templates"),
+    )
     app.config["TESTING"] = True
+
+    socket = _FakeSocketIO()
 
     def start_job(translation_id, config):
         from src.api.handlers import start_translation_job
         start_translation_job(
-            translation_id, config, state_manager, str(output_dir), _FakeSocketIO())
+            translation_id, config, state_manager, str(output_dir), socket)
 
     configure_routes(app, state_manager, str(output_dir), start_job)
     api_auth.register_auth(app)
@@ -87,7 +96,7 @@ def web(tmp_path, monkeypatch):
     yield SimpleNamespace(
         app=app, client=client, output_dir=output_dir, uploads_dir=uploads_dir,
         state_manager=state_manager, manager=checkpoint_manager, http=http,
-        llm=llm, tmp_path=tmp_path,
+        llm=llm, tmp_path=tmp_path, socket=socket,
     )
     checkpoint_manager.close()
 
@@ -142,6 +151,18 @@ def _download(web, filename):
     return web.client.get(f"/api/files/{quote(filename)}")
 
 
+def _wait_for_worker_release(web, translation_id, timeout=10):
+    """Wait until the worker releases its execution claim.
+
+    The terminal status is published just before the claim is released; a
+    resume issued in that window is legitimately refused with 409.
+    """
+    deadline = time.time() + timeout
+    while (web.state_manager.is_execution_active(translation_id)
+           and time.time() < deadline):
+        time.sleep(0.005)
+
+
 def _pdf_text(path_or_bytes):
     if isinstance(path_or_bytes, (bytes, bytearray)):
         document = pymupdf.open("pdf", bytes(path_or_bytes))
@@ -155,6 +176,34 @@ def _pdf_text(path_or_bytes):
 
 def _sidecar_path(output_dir, filename):
     return Path(output_dir) / (filename + ".accounting.json")
+
+
+def _assert_provider_credential_is_not_browser_visible(web, translation_id, status):
+    """No browser-visible surface may echo the MinerU account token.
+
+    The token lives only in the server environment; the job config carries the
+    authorization boolean, never the credential. Inspect every payload a page
+    actually receives: the status response, the translation/history lists, the
+    rendered HTML, and the JS bootstrap config.
+    """
+    assert status["config"]["mineru_authorized"] is True
+    assert "mineru_token" not in status["config"]
+    assert "mineru_api_token" not in status["config"]
+
+    payloads = {
+        "status": json.dumps(web.client.get(
+            f"/api/translation/{translation_id}").get_json()),
+        "translations": json.dumps(
+            web.client.get("/api/translations").get_json()),
+        "history": json.dumps(web.client.get("/api/history").get_json()),
+        "html": web.client.get("/").get_data(as_text=True),
+        "js_config": json.dumps(web.client.get("/api/config").get_json()),
+    }
+    for surface, body in payloads.items():
+        assert PROVIDER_TOKEN not in body, (
+            f"the MinerU token leaked into {surface}")
+        assert "mineru_api_token" not in body.lower(), (
+            f"the MinerU token field leaked into {surface}")
 
 
 def test_authorized_text_pdf_completes_and_downloads_a_translated_book(web):
@@ -173,7 +222,7 @@ def test_authorized_text_pdf_completes_and_downloads_a_translated_book(web):
     assert status["accounting"]["source_pages"] == 3
     assert status["accounting"]["result_pages"] == 3
     assert status["accounting"]["failed_chunks"] == 0
-    assert "mineru" not in json.dumps(status.get("config", {})).lower() or True
+    _assert_provider_credential_is_not_browser_visible(web, translation_id, status)
 
     downloaded = _download(web, "book (French).pdf")
     assert downloaded.status_code == 200
@@ -332,6 +381,7 @@ def test_an_incomplete_recognition_result_is_not_published(web):
     assert status["status"] == "error"
     assert status["error_code"] == "mineru_result_invalid"
     assert "page" in (status["error"] or "").lower()
+    assert web.manager.get_job(response.get_json()["translation_id"])["status"] == "error"
     assert _download(web, "incomplete.pdf").status_code == 404
     assert not _sidecar_path(web.output_dir, "incomplete.pdf").exists()
 
@@ -362,6 +412,7 @@ def test_attempted_continuation_fails_closed_without_resubmission(web):
     translation_id = response.get_json()["translation_id"]
     assert len(web.http.submitted_files()) == 1
 
+    _wait_for_worker_release(web, translation_id)
     resumed = web.client.post(f"/api/resume/{translation_id}", json={})
     assert resumed.status_code == 200, resumed.get_json()
     second = _wait_for_terminal(web, translation_id, timeout=60)
@@ -386,6 +437,130 @@ def test_bilingual_option_still_applies_to_the_translated_book(web):
     text = _pdf_text(downloaded.data)
     assert "FR: SAMPLE BOOK" in text
     assert text.count("SAMPLE BOOK") >= 2
+
+
+def _start_txt_job(web, upload, output_filename="story (French).txt"):
+    return web.client.post("/api/translate", json={
+        "file_path": upload["file_path"],
+        "file_type": "txt",
+        "source_language": "English",
+        "target_language": "French",
+        "model": "test-model",
+        "llm_api_endpoint": "http://localhost:11434/api/generate",
+        "llm_provider": "ollama",
+        "output_filename": output_filename,
+        "prompt_options": {},
+    })
+
+
+def test_a_failed_non_pdf_job_keeps_the_startup_sweep_contract(web, monkeypatch):
+    """Ticket 05: non-PDF failures stay 'running' in the DB, as before.
+
+    Only PDF/MinerU jobs gained the immediate mark_error; the startup sweep
+    remains the recovery path for every other format.
+    """
+    text_file = web.tmp_path / "story.txt"
+    text_file.write_text("Once upon a time.\n\nA second paragraph.\n", encoding="utf-8")
+    upload = _upload(web, text_file)
+
+    async def failing_translation(*args, **kwargs):
+        raise RuntimeError("fake translation failure")
+
+    monkeypatch.setattr(
+        "src.api.handlers.translate_file", failing_translation)
+
+    response = _start_txt_job(web, upload)
+    assert response.status_code == 200, response.get_json()
+    translation_id = response.get_json()["translation_id"]
+    status = _wait_for_terminal(web, translation_id)
+
+    assert status["status"] == "error", status
+    assert web.manager.get_job(translation_id)["status"] == "running", (
+        "a failed non-PDF job must stay for the startup sweep")
+
+
+def test_completion_emit_order_is_unchanged_for_non_pdf(web):
+    """Non-PDF jobs still set the terminal status before emitting the payload."""
+    text_file = web.tmp_path / "story.txt"
+    text_file.write_text("Once upon a time.\n\nA second paragraph.\n", encoding="utf-8")
+    upload = _upload(web, text_file)
+
+    seen = []
+
+    def on_emit(event, data, namespace):
+        if (event == "translation_update" and isinstance(data, dict)
+                and data.get("status") == "completed"):
+            seen.append(web.state_manager.get_translation_field(
+                data["translation_id"], "status"))
+
+    web.socket.on_emit = on_emit
+    response = _start_txt_job(web, upload)
+    status = _wait_for_terminal(web, response.get_json()["translation_id"])
+
+    assert status["status"] == "completed", status
+    assert seen == ["completed"], (
+        "the non-PDF completion emit must observe the already-terminal state")
+
+
+def test_pdf_completion_payload_is_emitted_before_the_terminal_status(web):
+    """PDF jobs keep the ordering guarantee added with whole-book completion."""
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+
+    upload = _upload(web, source)
+    seen = []
+
+    def on_emit(event, data, namespace):
+        if (event == "translation_update" and isinstance(data, dict)
+                and data.get("status") == "completed"):
+            seen.append(web.state_manager.get_translation_field(
+                data["translation_id"], "status"))
+
+    web.socket.on_emit = on_emit
+    response = _start(web, upload)
+    status = _wait_for_terminal(web, response.get_json()["translation_id"])
+
+    assert status["status"] == "completed", status
+    assert seen, "the completion payload was never emitted"
+    assert seen[0] != "completed", (
+        "a poller could observe a completed job before its payload")
+
+
+def test_pdf_reports_a_distinct_output_generation_phase(web):
+    """US10: recognition, translation and output generation are distinguishable.
+
+    The build+validation step is observable through the same stats payload the
+    progress UI already renders, and 'completed' is only published after the
+    validated output and its accounting exist.
+    """
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+
+    upload = _upload(web, source)
+    phases = []
+    completion_payload = {}
+
+    def on_emit(event, data, namespace):
+        if event != "translation_update" or not isinstance(data, dict):
+            return
+        phase = (data.get("stats") or {}).get("recognition_phase")
+        if phase:
+            phases.append(phase)
+        if data.get("status") == "completed":
+            completion_payload.update(data)
+
+    web.socket.on_emit = on_emit
+    response = _start(web, upload, output_filename="phases (French).pdf")
+    status = _wait_for_terminal(web, response.get_json()["translation_id"])
+
+    assert status["status"] == "completed", status
+    assert "output_generation" in phases, (
+        f"no separate output-generation phase was observable: {phases}")
+    assert phases.index("output_generation") > phases.index("recognizing")
+    assert phases.index("output_generation") > phases.index("validating")
+    # The terminal payload is emitted only once the validated book (and its
+    # accounting) exists, never before.
+    assert completion_payload.get("accounting", {}).get("body_complete") is True
 
 
 def test_non_pdf_workflow_is_unchanged(web):

@@ -26,6 +26,13 @@ PROGRESS_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "progress
 RESUME_JS = ROOT / "src" / "web" / "static" / "js" / "translation" / "resume-manager.js"
 TRANSLATION_TRACKER_JS = (
     ROOT / "src" / "web" / "static" / "js" / "translation" / "translation-tracker.js")
+WEBSOCKET_MANAGER_JS = (
+    ROOT / "src" / "web" / "static" / "js" / "core" / "websocket-manager.js")
+HANDLERS_PY = ROOT / "src" / "api" / "handlers.py"
+FILE_UPLOAD_JS = (
+    ROOT / "src" / "web" / "static" / "js" / "files" / "file-upload.js")
+BATCH_CONTROLLER_JS = (
+    ROOT / "src" / "web" / "static" / "js" / "translation" / "batch-controller.js")
 
 
 def test_pause_and_continue_strings_are_wired_through_the_existing_task_ui():
@@ -49,8 +56,10 @@ NEW_KEYS = [
     "mineru_authorization_title",
     "mineru_authorization_description",
     "mineru_authorization_required",
+    "mineru_task_authorization",
     "uploading_for_recognition",
     "recognizing_online",
+    "generating_output",
     "preparing_translation",
     "reusing_recognition",
     "continuing_recognition",
@@ -74,6 +83,7 @@ NEW_KEYS = [
     "mineru_error_continuation_result_unavailable",
     "mineru_error_continuation_upload_unrecoverable",
     "mineru_error_submission_unknown",
+    "mineru_error_submission_rejected",
     "mineru_error_upload_failed",
     "mineru_error_recognition_failed",
     "mineru_error_recognition_timeout",
@@ -115,12 +125,99 @@ def test_interpolation_tokens_match_english(locale, key):
     assert translated == reference, f"{locale}:{key} tokens differ"
 
 
-def test_authorization_control_is_wired_through_i18n():
+CHECKPOINT_PAUSED_KEYS = (
+    "checkpoint_recognition_paused",
+    "checkpoint_translation_paused",
+    "checkpoint_rate_limited",
+)
+
+
+def _load_common(locale: str) -> dict:
+    return json.loads((LOCALES / locale / "common.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("locale", SUPPORTED)
+@pytest.mark.parametrize("key", CHECKPOINT_PAUSED_KEYS)
+def test_checkpoint_paused_message_exists_in_every_locale(locale, key):
+    value = _load_common(locale).get(key)
+    assert isinstance(value, str) and value.strip(), (
+        f"{locale}: missing common:{key}")
+
+
+@pytest.mark.parametrize("locale", [locale for locale in SUPPORTED if locale != "en"])
+@pytest.mark.parametrize("key", CHECKPOINT_PAUSED_KEYS)
+def test_checkpoint_paused_message_keeps_the_name_token(locale, key):
+    reference = set(PLACEHOLDER_RE.findall(_load_common("en")[key]))
+    translated = set(PLACEHOLDER_RE.findall(_load_common(locale)[key]))
+    assert reference == {"name"}
+    assert translated == reference, f"{locale}: {key} tokens differ"
+
+
+def test_web_limit_fallbacks_match_the_server_admission_limits():
+    """The JS fallbacks cannot drift silently from the server's ceilings."""
+    from src.core.mineru.admission import MAX_BYTES, MAX_PAGES
+
+    source = MINERU_ERRORS_JS.read_text(encoding="utf-8")
+    pages = re.search(r"const DEFAULT_MAX_PAGES = (\d+);", source)
+    size = re.search(r"const DEFAULT_MAX_BYTES = (\d+);", source)
+    assert pages and size, "mineru-errors.js must declare both limit fallbacks"
+    assert int(pages.group(1)) == MAX_PAGES
+    assert int(size.group(1)) == MAX_BYTES
+
+
+def test_the_output_generation_phase_has_a_localized_progress_label():
+    progress = PROGRESS_JS.read_text(encoding="utf-8")
+    assert "case 'output_generation':" in progress
+    assert "translation:generating_output" in progress
+
+
+def test_checkpoint_message_is_resolved_at_render_time_not_server_side():
+    """The socket payload names a locale key; the browser owns the wording.
+
+    A raw English message here would be frozen in whatever locale the server
+    happened to run, so a language switch could never update it.
+    """
+    handlers = HANDLERS_PY.read_text(encoding="utf-8")
+    websocket = WEBSOCKET_MANAGER_JS.read_text(encoding="utf-8")
+
+    for key in CHECKPOINT_PAUSED_KEYS:
+        assert f"message_key': 'common:{key}'" in handlers
+    assert handlers.count("'message_params':") >= 3
+    assert "'message': 'Translation paused - checkpoint created'" not in handlers
+    assert "Recognition paused locally; the saved MinerU task" not in handlers
+
+    assert "data.message_key" in websocket
+    assert "t(data.message_key" in websocket
+    assert "data.message_params" in websocket
+    # The default stays reachable for events that do not carry a key.
+    assert "common:checkpoint_created_default" in websocket
+    # No raw server prose can bypass t() through this handler.
+    assert "data.message ||" not in websocket
+
+
+def test_pdf_upload_consent_is_granted_per_task():
+    """Spec: one brief upload confirmation for each task, not one per batch."""
     template = TEMPLATE.read_text(encoding="utf-8")
+    upload = FILE_UPLOAD_JS.read_text(encoding="utf-8")
+    batch = BATCH_CONTROLLER_JS.read_text(encoding="utf-8")
+
+    # The old batch-level tick is gone; the disclosure text remains.
     assert 'id="mineruAuthorization"' in template
-    assert 'id="mineruPdfConsent"' in template
+    assert 'id="mineruPdfConsent"' not in template
     assert 'data-i18n="translation:mineru_authorization_title"' in template
     assert 'data-i18n="translation:mineru_authorization_description"' in template
+
+    # Every queued PDF row renders its own control, localized and reactive.
+    assert "mineru_task_authorization" in upload
+    assert "file.mineruAuthorized" in upload
+    assert "consent.onchange" in upload
+    assert "this._updateFileField(" in upload
+    assert "localeChanged" in upload
+
+    # The batch requires each PDF's own tick and never grants one itself.
+    assert "file.mineruAuthorized !== true" in batch
+    assert "file.mineruAuthorized = true" not in batch
+    assert "mineruPdfConsent" not in batch
 
 
 def _error_codes() -> list[str]:
@@ -141,8 +238,11 @@ def test_every_server_error_code_has_a_web_localization():
     english = _load("en")
     for code in _error_codes():
         key = f"mineru_error_{code[len('mineru_'):]}"
-        assert english.get(key), f"missing translation key for {code}"
-        assert f"translation:{key}" not in json.dumps(english) or True
+        message = english.get(key)
+        assert message, f"missing translation key for {code}"
+        # The localized message is human prose; leaking the stable code into it
+        # would surface an untranslated technical token to the reader.
+        assert code not in message
 
 
 def test_the_js_code_set_matches_the_server_error_codes():

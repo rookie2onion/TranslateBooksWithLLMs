@@ -51,7 +51,13 @@ export const WebSocketManager = {
 
         socket.on('checkpoint_created', (data) => {
             console.log('Checkpoint created:', data);
-            MessageLogger.addLog(`⏸️ ${data.message || t('common:checkpoint_created_default')}`);
+            // Resolve the localized wording at render time. The server names a
+            // locale key (with interpolation params) instead of shipping a
+            // frozen English sentence, so a language switch can re-render it.
+            const message = data.message_key
+                ? t(data.message_key, data.message_params || {})
+                : t('common:checkpoint_created_default');
+            MessageLogger.addLog(`⏸️ ${message}`);
             this.emit('checkpoint_created', data);
         });
 

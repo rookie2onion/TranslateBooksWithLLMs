@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.utils.atomic_io import write_json_atomic
+from src.utils.hashing import sha256_file
 from src.utils.security import (
     SecurityError,
     find_unsafe_archive_member,
@@ -88,7 +90,7 @@ def build_online_result(
     return OnlineResult(
         cache=cache,
         root=result_root,
-        zip_sha256=_sha256_file(archive_path),
+        zip_sha256=sha256_file(archive_path),
         cache_sha256=cache_fingerprint(cache),
         page_count=len(cache.pages),
     )
@@ -211,16 +213,7 @@ def _write_source_manifest(root: Path, admitted: AdmittedSource) -> None:
         "sample_sha256": admitted.sha256,
         "translation_llm_called": False,
     }
-    temporary = root / (MANIFEST_NAME + ".part")
-    with temporary.open("w", encoding="utf-8") as stream:
-        json.dump(info, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        try:
-            import os
-            os.fsync(stream.fileno())
-        except OSError:  # pragma: no cover - fsync support varies
-            pass
-    temporary.replace(root / MANIFEST_NAME)
+    write_json_atomic(root / MANIFEST_NAME, info)
 
 
 def _load_cache(root: Path, admitted: AdmittedSource) -> MineruCache:
@@ -262,8 +255,3 @@ def _result_error(exc: MineruCacheError, root: Path) -> MineruResultInvalid:
         return MineruUnsupportedContent(
             f"The recognition result contains unsupported content: {text}")
     return MineruResultInvalid(f"The recognition result did not validate: {text}")
-
-
-def _sha256_file(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()

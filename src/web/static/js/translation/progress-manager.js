@@ -152,6 +152,11 @@ export function resolveOperationLabel(stats) {
             case 'downloading':
             case 'validating':
                 return t('translation:preparing_translation');
+            case 'output_generation':
+                // The recognition result is already translated; this is the
+                // PDF build/validation step, distinct from both recognition
+                // and translation (spec US10).
+                return t('translation:generating_output');
             case 'reused':
                 return t('translation:reusing_recognition');
             default:

@@ -281,6 +281,51 @@ def test_a_paused_recognition_continues_the_same_remote_task_without_resubmissio
                and item["status"] == "completed" for item in history)
 
 
+def test_a_slow_upload_ends_at_the_budget_and_pauses_instead_of_completing(
+        web, monkeypatch):
+    """A throttled upload cannot outlive the attempt's 300-second budget.
+
+    Only the external HTTP transport and the clock are substituted: the real
+    client, the real recognition state and the real Web task workflow run.
+    """
+    import requests
+
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    with open(source, "ab") as stream:
+        # Large enough that a throttled 1 MB-per-100 s upload needs more than
+        # the local budget; a PDF reader ignores trailing bytes after %%EOF.
+        stream.write(b"\0" * (4 * 1024 * 1024))
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+
+    def slow_request(session, method, url, **kwargs):
+        if method.upper() == "PUT":
+            body = kwargs.get("data")
+            while True:
+                chunk = body.read(1024 * 1024)
+                if not chunk:
+                    break
+                web.clock.advance(100)
+        return web.http.dispatch(method, url, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", slow_request)
+
+    upload = web.upload(source)
+    translation_id, first = web.start_and_wait(upload)
+
+    # The attempt pauses on the local budget; it never claims a completed book.
+    assert first["status"] == "interrupted", first
+    assert first["error_code"] == "mineru_recognition_timeout"
+    assert first["accounting"] is None
+    assert web.download("book (French).pdf").status_code == 404
+    assert web.llm.calls == 0, "translation must not start after the upload timed out"
+    assert len(_submissions(web.http)) == 1
+
+    state = web.recognition_state(translation_id)
+    assert state.phase == "upload_failed"
+    assert state.error_code == "mineru_recognition_timeout"
+    assert state.elapsed_seconds <= 300, "the upload overran the local budget"
+
+
 def test_a_continued_attempt_grants_a_fresh_budget_without_faking_attempts(
         web, fake_clock):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
@@ -1027,6 +1072,34 @@ def test_an_ambiguous_submission_stays_unknown_across_continue(web):
 # ---------------------------------------------------------------------------
 
 
+def test_a_rate_limited_submission_is_retryable_through_continue(web):
+    """A definite 429 accepted no task, so it is not submission_unknown."""
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+    from tests.test_mineru.online_fixtures import API_BASE
+
+    web.http.submit_override = lambda: response(
+        f"{API_BASE}/file-urls/batch", b"busy", status=429)
+
+    upload = web.upload(source)
+    translation_id, first = web.start_and_wait(upload)
+
+    assert first["status"] == "error", first
+    assert first["error_code"] == "mineru_submission_rejected"
+    state = web.recognition_state(translation_id)
+    assert state.phase == "admitted"
+    assert state.batch_id is None
+    assert len(_submissions(web.http)) == 1
+
+    web.http.submit_override = None
+    assert web.resume(translation_id).status_code == 200
+    second = web.wait_for_terminal(translation_id)
+
+    assert second["status"] == "completed", second
+    assert len(_submissions(web.http)) == 2, (
+        "the definitely-rejected submission is retried exactly once")
+
+
 def test_an_incomplete_upload_is_reported_as_not_automatically_continuable(web):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
     web.http.zip_bytes = result_zip_bytes(page_count=1)
@@ -1063,6 +1136,44 @@ def test_an_incomplete_upload_is_reported_as_not_automatically_continuable(web):
 # ---------------------------------------------------------------------------
 # Known validated result reuse (no provider request at all)
 # ---------------------------------------------------------------------------
+
+
+def test_resuming_a_partial_pdf_keeps_chunk_accounting_consistent(web):
+    """A retried restored segment must not be counted as newly processed.
+
+    Regression: partial -> Continue -> completed reported ``completed_chunks``
+    one above ``total_chunks`` (log "13/12") because the restored prefix had
+    already been counted by ``resume_stats``.
+    """
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = _multi_chunk_result_zip()
+
+    upload = web.upload(source)
+    original_generate = web.llm.generate
+
+    async def failing_generate(prompt, timeout=300, system_prompt=None):
+        raise RuntimeError("simulated chunk failure")
+
+    web.llm.generate = failing_generate
+    translation_id, first = web.start_and_wait(upload)
+
+    assert first["status"] == "partial", first
+    assert first["stats"]["failed_chunks"] > 0
+    submissions = len(_submissions(web.http))
+    assert submissions == 1
+
+    web.llm.generate = original_generate
+    assert web.resume(translation_id).status_code == 200
+    second = web.wait_for_terminal(translation_id)
+
+    assert second["status"] == "completed", second
+    assert len(_submissions(web.http)) == submissions, (
+        "resuming a partial PDF must reuse the validated recognition result")
+    stats = second["stats"]
+    assert stats["total_chunks"] > 0
+    assert stats["completed_chunks"] == stats["total_chunks"], stats
+    assert stats.get("failed_chunks", 0) == 0, stats
+    assert stats.get("unfinished_chunks", 0) == 0, stats
 
 
 def test_continue_reuses_a_validated_result_instead_of_recognizing_again(web):

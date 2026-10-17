@@ -35,6 +35,7 @@ from .errors import (
     MineruRequestRejected,
     MineruResponseInvalid,
     MineruResultInvalid,
+    MineruSubmissionRejected,
     MineruTimeout,
     MineruUploadFailed,
 )
@@ -109,6 +110,39 @@ def _sanitize(text: Any) -> str:
         return ""
     cleaned = _URL_RE.sub("<URL>", text).strip()
     return cleaned[:_ERROR_DETAIL_LIMIT]
+
+
+class _DeadlineBoundedStream:
+    """File-like upload body that aborts once the caller's deadline expires.
+
+    ``requests`` streams a file object in chunks while sending the body, and a
+    per-read socket timeout does not bound the total time a 50 MB upload may
+    take. Re-checking the shared deadline around every read keeps the whole
+    operation inside the remaining recognition budget.
+    """
+
+    def __init__(self, stream: Any, clock: Callable[[], float],
+                 deadline: float) -> None:
+        self._stream = stream
+        self._clock = clock
+        self._deadline = deadline
+
+    def read(self, size: int = -1) -> Any:
+        self._check()
+        chunk = self._stream.read(size)
+        self._check()
+        return chunk
+
+    def _check(self) -> None:
+        if self._clock() >= self._deadline:
+            raise MineruTimeout(
+                "The local recognition budget elapsed during the PDF upload; "
+                "the upload was aborted before it could complete.")
+
+    def __getattr__(self, name: str) -> Any:
+        # requests inspects ``fileno``/``tell`` to size the body and derive the
+        # Content-Length; delegating keeps the upload a plain fixed-length PUT.
+        return getattr(self._stream, name)
 
 
 class MineruClient:
@@ -194,14 +228,26 @@ class MineruClient:
 
     def _storage_upload(self, url: str, stream: Any, deadline: float) -> None:
         timeout = self._timeout(deadline)
+        bounded_stream = _DeadlineBoundedStream(stream, self._clock, deadline)
         try:
             response = self._session.request(
-                "PUT", url, data=stream, headers={}, timeout=timeout,
+                "PUT", url, data=bounded_stream, headers={}, timeout=timeout,
                 allow_redirects=False,
             )
         except requests.RequestException as exc:
+            if self._clock() >= deadline:
+                raise MineruTimeout(
+                    "The local recognition budget elapsed during the PDF "
+                    "upload; the upload was aborted before it could complete."
+                ) from exc
             raise MineruNetworkError(
                 "The upload to MinerU storage failed before it completed.") from exc
+        # A request that returned only after the budget elapsed is still a
+        # timeout: the attempt must not be reported as a completed upload.
+        if self._clock() >= deadline:
+            raise MineruTimeout(
+                "The local recognition budget elapsed during the PDF upload; "
+                "the upload was aborted before it could complete.")
         if response.status_code not in (200, 201, 204):
             raise MineruUploadFailed(
                 f"Uploading the PDF to MinerU storage failed "
@@ -333,7 +379,13 @@ class MineruClient:
         attempts = self._max_retries + 1 if retry_safe else 1
         last_error: Optional[Exception] = None
         for attempt in range(attempts):
-            timeout = self._timeout(deadline)
+            try:
+                timeout = self._timeout(deadline)
+            except MineruTimeout as exc:
+                # Nothing was sent: the caller may classify this as retryable
+                # rather than as an ambiguous submission outcome.
+                exc.request_sent = False
+                raise
             try:
                 response = self._session.request(
                     method, url,
@@ -354,6 +406,13 @@ class MineruClient:
             if status in (401, 403):
                 raise MineruRequestRejected(
                     f"MinerU rejected the configured credentials (HTTP {status}).")
+            if status == 429 and not retry_safe:
+                # The non-idempotent submission was refused, not accepted:
+                # retrying the same task later is safe, and the outcome is
+                # known.
+                raise MineruSubmissionRejected(
+                    "MinerU temporarily rejected the submission (HTTP 429); no "
+                    "recognition task was accepted.")
             if status in (429,) or 500 <= status < 600:
                 last_error = MineruNetworkError(
                     f"MinerU temporarily rejected the request (HTTP {status}).")

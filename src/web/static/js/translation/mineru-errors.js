@@ -24,6 +24,7 @@ const KNOWN_CODES = new Set([
     'mineru_continuation_result_unavailable',
     'mineru_continuation_upload_unrecoverable',
     'mineru_submission_unknown',
+    'mineru_submission_rejected',
     'mineru_upload_failed',
     'mineru_recognition_failed',
     'mineru_recognition_timeout',
@@ -37,6 +38,9 @@ const KNOWN_CODES = new Set([
     'mineru_completion_invalid',
 ]);
 
+// Fallbacks for payloads that omit `limits`. Keep them in lockstep with
+// MAX_PAGES / MAX_BYTES in src/core/mineru/admission.py; the server-side test
+// test_web_limit_fallbacks_match_the_server_admission_limits guards the pair.
 const DEFAULT_MAX_PAGES = 200;
 const DEFAULT_MAX_BYTES = 200000000;
 

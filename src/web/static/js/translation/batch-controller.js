@@ -42,21 +42,14 @@ function hasQueuedPdf(files) {
 
 
 /**
- * Show the brief PDF upload-authorization control only when a PDF is queued,
- * and lock it while a batch is running. The checkbox is the only place the
- * consent is granted; no run starts with a PDF unless it is ticked.
+ * Show the brief PDF upload disclosure only when a PDF is queued. Consent
+ * itself is per task and lives on each queued PDF's own checkbox.
  */
 export function refreshMineruAuthorization() {
     const container = DomHelpers.getElement('mineruAuthorization');
-    const checkbox = DomHelpers.getElement('mineruPdfConsent');
     if (!container) return;
-
     const files = StateManager.getState('files.toProcess') || [];
-    const show = hasQueuedPdf(files);
-    container.hidden = !show;
-    if (!checkbox) return;
-    if (!show) checkbox.checked = false;
-    checkbox.disabled = StateManager.getState('translation.isBatchActive') === true;
+    container.hidden = !hasQueuedPdf(files);
 }
 
 // The queue is restored, edited and advanced from several modules; every one of
@@ -168,8 +161,8 @@ function getTranslationConfig(file) {
         }
     }
 
-    // PDF is recognized online only, so each task carries the explicit upload
-    // authorization granted for the batch it was queued in. A missing value
+    // PDF is recognized online only, so each task carries its own explicit
+    // upload authorization, granted by that file's checkbox. A missing value
     // stays false: the server then refuses the job.
     if (file.fileType === 'pdf') {
         config.mineru_authorized = file.mineruAuthorized === true;
@@ -269,21 +262,15 @@ export const BatchController = {
             StateManager.setState('files.toProcess', filesToProcess);
         }
 
-        // Online PDF recognition sends the document to a third party, so it
-        // needs the reader's explicit, per-batch confirmation. The checkbox is
-        // the only source of that consent; it is consumed here and cleared once
-        // the batch starts, so it can never authorize a later run.
-        if (hasQueuedPdf(filesToProcess)) {
-            const consentCheckbox = DomHelpers.getElement('mineruPdfConsent');
-            if (!consentCheckbox || !consentCheckbox.checked) {
-                return earlyValidationFail(t('translation:mineru_authorization_required'));
-            }
-            for (const file of filesToProcess) {
-                if (file.status === 'Queued' && file.fileType === 'pdf') {
-                    file.mineruAuthorized = true;
-                }
-            }
-            StateManager.setState('files.toProcess', filesToProcess);
+        // Online PDF recognition sends the document to a third party. Each
+        // queued PDF must carry its own explicit authorization tick: the
+        // consent is granted per task, never for the whole batch. The server
+        // re-checks the per-task flag at its admission boundary.
+        const unauthorizedPdf = filesToProcess.find(
+            file => file.status === 'Queued' && file.fileType === 'pdf'
+                && file.mineruAuthorized !== true);
+        if (unauthorizedPdf) {
+            return earlyValidationFail(t('translation:mineru_authorization_required'));
         }
 
         // Last chance to adjust the per-run options. Placed after validation so a
@@ -292,11 +279,6 @@ export const BatchController = {
         if (!await PreflightModal.confirm()) return;
 
         StateManager.setState('translation.isBatchActive', true);
-
-        // The authorization above was granted for this dispatch only.
-        const consumedConsent = DomHelpers.getElement('mineruPdfConsent');
-        if (consumedConsent) consumedConsent.checked = false;
-        refreshMineruAuthorization();
 
         const queuedFilesCount = filesToProcess.filter(f => f.status === 'Queued').length;
 
@@ -402,6 +384,9 @@ export const BatchController = {
             TranslationTracker.registerOwnedJob(data.translation_id);
 
             fileToTranslate.translationId = data.translation_id;
+            // The task-level consent was consumed by this submission; a later
+            // run needs a fresh tick.
+            fileToTranslate.mineruAuthorized = false;
             updateFileStatusInList(fileToTranslate.name, 'Submitted', data.translation_id);
 
             DomHelpers.show('progressSection');

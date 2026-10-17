@@ -67,6 +67,9 @@
   "state_desync_syncing": "상태 비동기화 감지: 서버에서는 작업이 {{status}} 상태이지만 UI는 여전히 활성 상태입니다. 동기화 중...",
   "translation_job_missing": "서버에 번역 작업이 더 이상 존재하지 않습니다. UI를 초기화합니다.",
   "checkpoint_created_default": "체크포인트가 생성되었습니다",
+  "checkpoint_recognition_paused": "{{name}}의 인식이 로컬에서 일시 중지되었습니다. 저장된 MinerU 작업은 PDF를 다시 업로드하지 않고 계속할 수 있습니다.",
+  "checkpoint_translation_paused": "{{name}}의 번역이 일시 중지되었습니다. 체크포인트가 생성되었습니다.",
+  "checkpoint_rate_limited": "{{name}}의 번역이 속도 제한 후 일시 중지되었습니다. 체크포인트가 생성되었습니다.",
 
   "sending": "전송 중...",
   "test_sent_default": "테스트가 전송되었습니다.",
