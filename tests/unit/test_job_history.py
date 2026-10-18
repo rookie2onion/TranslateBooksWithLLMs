@@ -24,7 +24,6 @@ from src.api.blueprints.translation_routes import (
 from src.api.translation_state import TranslationStateManager
 from src.persistence.checkpoint_manager import CheckpointManager
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -325,6 +324,7 @@ HISTORY_KEYS = {
     'completed_at',
     'total_chunks',
     'completed_chunks',
+    'accounting_available',
 }
 
 

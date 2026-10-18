@@ -1,12 +1,13 @@
 """
 Centralized configuration class
 """
+import logging
 import os
 import sys
-import logging
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+
 from dotenv import load_dotenv
 
 # Setup debug logger for configuration
@@ -337,22 +338,22 @@ SOFT_LIMIT_RATIO = float(os.getenv('SOFT_LIMIT_RATIO', '0.8'))
 
 # === Translation Buffer Configuration ===
 TRANSLATION_OUTPUT_MULTIPLIER = 2
-"""Multiplicateur pour la longueur de sortie estimée (certaines langues cibles
-peuvent être 2x plus longues que la source)"""
+"""Multiplier for the estimated output length (some target languages can be
+twice as long as the source)."""
 
 TRANSLATION_TAG_OVERHEAD = 50
-"""Tokens réservés pour les balises XML de traduction (<Translated>...</Translated>)"""
+"""Tokens reserved for the XML translation tags (<Translated>...</Translated>)."""
 
 # === Placeholder Validation ===
 MAX_PLACEHOLDER_RETRIES = 3
-"""Nombre maximum de tentatives de validation des placeholders"""
+"""Maximum number of placeholder validation attempts."""
 
 MAX_PLACEHOLDER_CORRECTION_ATTEMPTS = 2
-"""Nombre maximum de tentatives de correction LLM pour les placeholders malformés"""
+"""Maximum number of LLM correction attempts for malformed placeholders."""
 
 # === Chunking Limits ===
 MIN_CHUNK_SIZE_TOKENS = 50
-"""Taille minimale d'un chunk pour éviter la sur-fragmentation"""
+"""Minimum chunk size to avoid over-fragmentation."""
 
 # LLM Provider configuration
 # LLM_PROVIDER, GEMINI_*, OPENAI_*, OPENROUTER_API_KEY/MODEL, MISTRAL_API_KEY/MODEL,
@@ -473,6 +474,17 @@ OUTPUT_DIR = str(Path(os.getenv('OUTPUT_DIR', 'translated_files')).expanduser().
 
 # Debug mode (reload after .env is loaded)
 DEBUG_MODE = os.getenv('DEBUG_MODE', 'false').lower() == 'true'
+
+
+def mineru_api_token():
+    """Resolve the MinerU account token from the existing environment mechanism.
+
+    Read at call time (like every other .env value) so ``reload_config()`` and a
+    process-level environment variable are both honoured. The value is never
+    logged, persisted in a job config, forwarded to storage requests or exposed
+    to the browser.
+    """
+    return (os.getenv('MINERU_API_TOKEN') or '').strip()
 
 
 def reload_config():
@@ -702,13 +714,13 @@ DEFAULT_CONTEXT_FALLBACK = 2048
 @dataclass
 class TranslationConfig:
     """Unified configuration for both CLI and web interfaces"""
-    
+
     # Core settings
     source_language: str = DEFAULT_SOURCE_LANGUAGE
     target_language: str = DEFAULT_TARGET_LANGUAGE
     model: str = DEFAULT_MODEL
     api_endpoint: str = API_ENDPOINT
-    
+
     # LLM Provider settings
     llm_provider: str = LLM_PROVIDER
     gemini_api_key: str = GEMINI_API_KEY

@@ -13,7 +13,7 @@ def _checkpoint_manager_without_job():
     return manager
 
 
-async def _route(input_path, output_path, checkpoint_manager):
+async def _route(input_path, output_path, checkpoint_manager, **kwargs):
     return await translate_file(
         input_filepath=input_path,
         output_filepath=output_path,
@@ -24,6 +24,7 @@ async def _route(input_path, output_path, checkpoint_manager):
         checkpoint_manager=checkpoint_manager,
         translation_id="job1",
         llm_api_endpoint="http://localhost:11434/api/generate",
+        **kwargs,
     )
 
 
@@ -47,6 +48,10 @@ async def test_pdf_routes_to_translate_pdf_file(simple_pdf_path, tmp_path):
     assert kwargs["llm_client"] is llm_client
     assert kwargs["checkpoint_manager"] is manager
     assert kwargs["translation_id"] == "job1"
+    # Online recognition is authorization-gated by default; the caller must
+    # pass the task's explicit consent through.
+    assert kwargs["mineru_authorized"] is False
+    assert kwargs["recognition_progress_callback"] is None
     # The parent checkpoint job is created for PDF, like EPUB/DOCX
     manager.start_job.assert_called_once()
     assert manager.start_job.call_args.kwargs["file_type"] == "pdf"
@@ -73,3 +78,24 @@ def test_get_file_type_from_path_pdf():
     # Existing mappings are unchanged
     assert get_file_type_from_path("a.docx") == "docx"
     assert get_file_type_from_path("a.epub") == "epub"
+
+
+@pytest.mark.asyncio
+async def test_pdf_forwarding_of_authorization_and_progress(simple_pdf_path, tmp_path):
+    output = str(tmp_path / "out.pdf")
+    manager = _checkpoint_manager_without_job()
+    pdf_mock = AsyncMock(return_value={'success': True, 'stats': {}, 'output_path': output})
+    progress = Mock()
+
+    with patch("src.core.llm.create_llm_provider", return_value=Mock()), \
+            patch("src.core.pdf.translator.translate_pdf_file", pdf_mock):
+        result = await _route(simple_pdf_path, output, manager,
+                              mineru_authorized=True,
+                              recognition_progress_callback=progress,
+                              recognition_budget_seconds=17.0)
+
+    assert result is True
+    kwargs = pdf_mock.await_args.kwargs
+    assert kwargs["mineru_authorized"] is True
+    assert kwargs["recognition_progress_callback"] is progress
+    assert kwargs["recognition_budget_seconds"] == 17.0

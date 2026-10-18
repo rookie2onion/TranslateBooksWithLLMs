@@ -48,11 +48,12 @@ written in that case.
 
 ## Exclusions, always recorded
 
-- Running headers and typed page numbers are excluded only when the recogniser
-  typed them as such, the block sits inside the top 12% band, and its text looks
-  like running matter: a short header without terminal punctuation, or a page
-  number in digits or Roman numerals. The reason records the text length and how
-  often it occurs in the sample.
+- Running headers, running footers and typed page numbers are excluded only when
+  the recogniser typed them as such, the block sits inside the matching margin
+  band (top 12%, or bottom 12% for footers), and its text looks like running
+  matter: a short header/footer without terminal punctuation, or a page number in
+  digits or Roman numerals. The reason records the text length and how often it
+  occurs in the sample.
 - Empty recognition records are counted and recorded as `empty_record`.
 
 A numeric top-margin paragraph is kept and flagged `possible_page_number`,

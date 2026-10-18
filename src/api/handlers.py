@@ -1,32 +1,36 @@
 """
 Translation job handlers and processing logic
 """
-import os
-import re
-import time
 import asyncio
 import logging
+import os
+import re
 import tempfile
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from src.utils.unified_logger import setup_web_logger, LogType
-from src.utils.file_utils import get_unique_output_path, find_partial_output_paths, generate_tts_for_translation
-from src.utils.custom_instructions import (
-    load_custom_instructions,
-    is_safe_filename,
-)
+from src.config import AUTO_PAUSE_ON_RATE_LIMIT, RATE_LIMIT_AUTO_RESUME_DELAY
 from src.core import auto_prep
+from src.core.adapters import refine_file, translate_file
 from src.core.llm import OpenRouterProvider
 from src.core.llm.exceptions import RateLimitError
 from src.core.llm_client import create_llm_client
-from src.config import AUTO_PAUSE_ON_RATE_LIMIT, RATE_LIMIT_AUTO_RESUME_DELAY
-from src.core.adapters import translate_file, refine_file
+from src.core.mineru.errors import MineruCompletionInvalid, MineruTimeout
+from src.core.pdf.accounting import assess_pdf_completion, read_accounting_summary
 from src.core.progress import snapshot_from_legacy_stats
 from src.tts.tts_config import TTSConfig
-from src.utils.notifier import notify, EVENT_SUCCESS, EVENT_FAILURE, EVENT_INTERRUPTION
+from src.utils.custom_instructions import is_safe_filename, load_custom_instructions
+from src.utils.file_utils import (
+    find_partial_output_paths,
+    generate_tts_for_translation,
+    get_unique_output_path,
+)
+from src.utils.notifier import EVENT_FAILURE, EVENT_INTERRUPTION, EVENT_SUCCESS, notify
+from src.utils.unified_logger import LogType, setup_web_logger
+
 from .completion_status import classify_completion
 from .websocket import emit_update
 
@@ -408,7 +412,7 @@ def resolve_output_path(output_dir, output_filename, is_resume):
 def run_translation_async_wrapper(translation_id, config, state_manager, output_dir, socketio):
     """
     Wrapper for running translation in async context
-    
+
     Args:
         translation_id (str): Translation job ID
         config (dict): Translation configuration
@@ -433,12 +437,20 @@ def run_translation_async_wrapper(translation_id, config, state_manager, output_
             emit_update(socketio, translation_id, {'error': error_msg, 'status': 'error', 'log': f"CRITICAL WRAPPER ERROR: {error_msg}"}, state_manager)
     finally:
         loop.close()
+        # Release this job's single active-execution claim, whatever the
+        # outcome. Until this runs, a repeated Continue request is refused.
+        release = getattr(state_manager, 'release_execution', None)
+        if release is not None:
+            try:
+                release(translation_id)
+            except Exception:  # pragma: no cover - release must never fail
+                pass
 
 
 async def perform_actual_translation(translation_id, config, state_manager, output_dir, socketio):
     """
     Perform the actual translation job
-    
+
     Args:
         translation_id (str): Translation job ID
         config (dict): Translation configuration
@@ -468,7 +480,7 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         state_manager.set_translation_field(translation_id, 'logs', logs)
         # Send full log entry for structured processing on client side
         emit_update(socketio, translation_id, {'log': log_entry['message'], 'log_entry': log_entry}, state_manager)
-    
+
     def storage_callback(log_entry):
         """Callback for storing logs"""
         logs = state_manager.get_translation_field(translation_id, 'logs')
@@ -476,15 +488,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             logs = []
         logs.append(log_entry)
         state_manager.set_translation_field(translation_id, 'logs', logs)
-    
+
     logger = setup_web_logger(web_callback, storage_callback)
-    
+
     def _log_message_callback(message_key_from_translate_module, message_content="", data=None):
         """Legacy callback wrapper for backward compatibility"""
         # Skip debug messages for web interface
         if message_key_from_translate_module in ["llm_prompt_debug", "llm_raw_response_preview"]:
             return
-        
+
         # Handle structured data from new logging system
         if data and isinstance(data, dict):
             log_type = data.get('type')
@@ -575,6 +587,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         # makes the header read "Preparing…" instead of a frozen "Translating
         # 0/0", and each emit refreshes elapsed_time so the panel stays alive.
         _emit_progress({}, {'auto_prep_active': bool(active)})
+
+    def _recognition_progress_callback(phase):
+        # Online recognition runs before the first chunk exists too. Naming the
+        # phase keeps "submitted/recognizing/downloading" from being mistaken
+        # for translation progress; once validated, the flag is cleared so the
+        # normal translation label takes over.
+        _emit_progress({}, {
+            'recognition_phase': None if phase in ('validated', 'reused') else phase,
+        })
 
     def _openrouter_cost_callback(cost_data):
         """Update OpenRouter cost in state. No emit: this callback runs on the
@@ -790,6 +811,10 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 stats_callback=_translate_stats_callback,
                 check_interruption_callback=should_interrupt_current_task,
                 resume_from_index=resume_from_index,
+                # A user-requested continuation of this job: the PDF path uses
+                # it to refuse a hidden resubmission when its task-owned
+                # recognition state is missing.
+                is_resume=is_resume,
                 llm_api_endpoint=config['llm_api_endpoint'],
                 gemini_api_key=config.get('gemini_api_key', ''),
                 openai_api_key=config.get('openai_api_key', ''),
@@ -809,7 +834,12 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 # with approximate tag positions. Set only by the resume
                 # endpoint, from the completion card's explicit action; absent
                 # (hence False) on every normal run and every normal resume.
-                retry_token_aligned=bool(config.get('retry_token_aligned', False))
+                retry_token_aligned=bool(config.get('retry_token_aligned', False)),
+                # PDF only. The task's explicit MinerU upload authorization is
+                # re-checked at the core submission boundary; a resumed job
+                # carries the authorization recorded with its own source.
+                mineru_authorized=bool(config.get('mineru_authorized', False)),
+                recognition_progress_callback=_recognition_progress_callback,
             )
 
             # Optional chained refinement pass on the translated output.
@@ -915,9 +945,45 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         if config.get('llm_api_endpoint'):
             final_status_payload['llm_api_endpoint'] = config['llm_api_endpoint']
 
+        # Attach the final stats and the durable accounting now, before any
+        # terminal status is published. A client that observes the terminal
+        # state must already be able to read the same completion payload.
+        final_status_payload['stats'] = state_manager.get_translation_field(
+            translation_id, 'stats') or {}
+        if os.path.exists(output_filepath_on_server):
+            accounting_summary = read_accounting_summary(output_filepath_on_server)
+            if accounting_summary:
+                final_status_payload['accounting'] = accounting_summary
+        payload_emitted = False
+
         if state_manager.get_translation_field(translation_id, 'interrupted'):
             state_manager.set_translation_field(translation_id, 'status', 'interrupted')
-            _log_message_callback("summary_interrupted", f"🛑 Translation interrupted - partial result saved ({elapsed_time:.2f}s)")
+            # A cooperative stop can land during recognition (before any
+            # translation exists). Carry that stable code so the Web UI can say
+            # "recognition stopped locally" instead of claiming cancellation or
+            # mislabelling it as a translation error.
+            recognition_state = None
+            if config.get('file_type') == 'pdf':
+                try:
+                    recognition_state = checkpoint_manager.load_recognition_state(
+                        translation_id)
+                except Exception:  # pragma: no cover - never fail the pause
+                    recognition_state = None
+                if recognition_state is not None and recognition_state.error_code:
+                    state_manager.update_stats(
+                        translation_id, {'recognition_phase': None})
+                    state_manager.set_translation_field(
+                        translation_id, 'error_code', recognition_state.error_code)
+                    final_status_payload['error_code'] = recognition_state.error_code
+            if (recognition_state is not None
+                    and recognition_state.phase == 'interrupted_local'):
+                _log_message_callback(
+                    "pdf_recognition_stopped",
+                    "⏸️ Recognition stopped locally; the saved MinerU task can "
+                    "be continued without uploading the PDF again. The remote "
+                    "task may continue - this is not a cancellation.")
+            else:
+                _log_message_callback("summary_interrupted", f"🛑 Translation interrupted - partial result saved ({elapsed_time:.2f}s)")
             final_status_payload['status'] = 'interrupted'
             await asyncio.to_thread(notify, EVENT_INTERRUPTION,
                 _notification_context(config, translation_id, elapsed_time))
@@ -925,11 +991,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             # Mark checkpoint as interrupted in database
             checkpoint_manager.mark_interrupted(translation_id)
 
-            # Emit checkpoint_created event to trigger UI update
+            # Emit checkpoint_created event to trigger UI update. The browser
+            # resolves the locale key; the server never ships English prose.
             socketio.emit('checkpoint_created', {
                 'translation_id': translation_id,
                 'status': 'interrupted',
-                'message': 'Translation paused - checkpoint created'
+                'message_key': 'common:checkpoint_translation_paused',
+                'message_params': {
+                    'name': config.get('output_filename') or translation_id,
+                },
             }, namespace='/')
 
             # DON'T clean up uploaded file on interruption - keep it for resume capability
@@ -967,7 +1037,40 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
             verdict = classify_completion(stats, output_filepath_on_server)
             stats_summary = _format_stats_summary(config, stats, verdict)
 
-            if verdict.status == 'error':
+            # A structurally valid PDF/report is not automatically a whole
+            # book. The durable accounting must prove exact source-page
+            # coverage, complete block accounting and a complete translated
+            # body before this job may become 'completed'. Existing completion
+            # classification stays authoritative for partial/error outcomes;
+            # this gate can only turn a would-be success into a non-success.
+            completion_problem = None
+            if verdict.status == 'completed' and config.get('file_type') == 'pdf':
+                completion_problem = assess_pdf_completion(
+                    output_filepath_on_server)
+
+            if completion_problem is not None and not completion_problem.complete:
+                # Keep the published output/report (they are valid artifacts)
+                # and keep the working data: this job is retryable, not a book.
+                state_manager.set_translation_field(translation_id, 'status', 'error')
+                state_manager.set_translation_field(
+                    translation_id, 'error', completion_problem.message)
+                state_manager.set_translation_field(
+                    translation_id, 'error_code', MineruCompletionInvalid.code)
+                final_status_payload['status'] = 'error'
+                final_status_payload['error'] = completion_problem.message
+                final_status_payload['error_code'] = MineruCompletionInvalid.code
+                _log_message_callback(
+                    "summary_completion_invalid",
+                    f"❌ The translated PDF was kept, but whole-book completion "
+                    f"could not be proven ({completion_problem.reason}): "
+                    f"{completion_problem.message}")
+                checkpoint_manager.mark_error(translation_id)
+                await asyncio.to_thread(
+                    notify, EVENT_FAILURE,
+                    _notification_context(
+                        config, translation_id, elapsed_time,
+                        error=completion_problem.message))
+            elif verdict.status == 'error':
                 # The translation loop ran to the end but produced no usable
                 # output file. Report it honestly instead of claiming success.
                 state_manager.set_translation_field(translation_id, 'status', 'error')
@@ -996,11 +1099,8 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 checkpoint_manager.mark_partial(translation_id)
                 # No pruning — the checkpoint is deliberately kept for retry.
             else:
-                state_manager.set_translation_field(translation_id, 'status', 'completed')
                 _log_message_callback("summary_completed", f"✅ Translation completed in {elapsed_time:.2f}s{stats_summary}")
                 final_status_payload['status'] = 'completed'
-                await asyncio.to_thread(notify, EVENT_SUCCESS,
-                    _notification_context(config, translation_id, elapsed_time))
 
                 # The job is marked 'completed' in the database and the row is
                 # KEPT: it does NOT appear in get_resumable_jobs (a finished
@@ -1011,14 +1111,15 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 # which already includes 'completed'.
                 #
                 # What is dropped is only the bulky resume data — the checkpoint
-                # chunks and uploads/<job>/ — via prune_job_data. That pruning is
-                # skipped when the book still holds chunks that token alignment
-                # translated with approximate tag positions. Those chunks are
-                # not a defect the verdict cares about (the job is and stays
-                # 'completed', design decision D3), but the completion card
-                # offers an explicit "retry them with another model" action, and
-                # that action needs the checkpoint plus the per-file XHTML
-                # states plus the preserved input file.
+                # chunks and uploads/<job>/ (including task-owned recognition
+                # files) — via prune_job_data. That pruning is skipped when the
+                # book still holds chunks that token alignment translated with
+                # approximate tag positions. Those chunks are not a defect the
+                # verdict cares about (the job is and stays 'completed', design
+                # decision D3), but the completion card offers an explicit
+                # "retry them with another model" action, and that action needs
+                # the checkpoint plus the per-file XHTML states plus the
+                # preserved input file.
                 if _degraded_chunk_count(stats) > 0:
                     checkpoint_manager.mark_completed(translation_id)
                     _log_message_callback("checkpoint_kept_degraded",
@@ -1028,6 +1129,23 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 else:
                     checkpoint_manager.mark_completed(translation_id)
                     checkpoint_manager.prune_job_data(translation_id)
+
+                # Publish the completion payload first, then make the terminal
+                # status observable, for PDF jobs only: the whole-book
+                # completion card must never be observed against a job whose
+                # payload has not been emitted yet. Every other format keeps
+                # its historical ordering (status first, payload at the end).
+                if config.get('file_type') == 'pdf':
+                    emit_update(socketio, translation_id, final_status_payload,
+                                state_manager)
+                    state_manager.set_translation_field(
+                        translation_id, 'status', 'completed')
+                    payload_emitted = True
+                else:
+                    state_manager.set_translation_field(
+                        translation_id, 'status', 'completed')
+                await asyncio.to_thread(notify, EVENT_SUCCESS,
+                    _notification_context(config, translation_id, elapsed_time))
 
             # Clean up uploaded file if it exists and is in the uploads directory
             # On completion (or a partial run) we can safely delete the original
@@ -1084,10 +1202,12 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 _log_message_callback
             )
 
-        # Attach final stats so the completion card can render its summary
-        # (cost, tokens, failed chunks…). emit_update no longer auto-attaches.
-        final_status_payload['stats'] = state_manager.get_translation_field(translation_id, 'stats') or {}
-        emit_update(socketio, translation_id, final_status_payload, state_manager)
+        # The final stats/accounting are attached above, before any terminal
+        # status; only statuses that did not already publish their payload emit
+        # it here.
+        if not payload_emitted:
+            emit_update(socketio, translation_id, final_status_payload,
+                        state_manager)
 
         # Trigger file list refresh in the frontend if a file was saved
         if os.path.exists(output_filepath_on_server) and final_status_payload['status'] in ['completed', 'interrupted', 'partial']:
@@ -1190,7 +1310,10 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         socketio.emit('checkpoint_created', {
             'translation_id': translation_id,
             'status': 'rate_limited',
-            'message': pause_msg
+            'message_key': 'common:checkpoint_rate_limited',
+            'message_params': {
+                'name': config.get('output_filename') or translation_id,
+            },
         }, namespace='/')
 
         output_filepath = state_manager.get_translation_field(translation_id, 'output_filepath')
@@ -1200,6 +1323,48 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
                 'filename': config.get('output_filename', 'unknown')
             }, namespace='/')
 
+    except MineruTimeout as e:
+        # The five-minute local recognition budget elapsed before any
+        # translation started. This is a local pause, not remote cancellation
+        # and not a provider failure: the saved recognition task is kept so the
+        # user's Continue action can re-poll it without uploading again.
+        if not state_manager.exists(translation_id):
+            return
+        _log_message_callback("pdf_recognition_paused", f"⏸️ {e}")
+        state_manager.update_stats(translation_id, {'recognition_phase': None})
+        state_manager.set_translation_field(translation_id, 'status', 'interrupted')
+        state_manager.set_translation_field(translation_id, 'error_code', e.code)
+        state_manager.set_translation_field(translation_id, 'error', str(e))
+        state_manager.set_translation_field(
+            translation_id, 'result',
+            "Recognition paused locally after the five-minute budget. The saved "
+            "MinerU task can be continued without uploading the PDF again.")
+        state_manager.get_checkpoint_manager().mark_interrupted(translation_id)
+
+        stats = state_manager.get_translation_field(translation_id, 'stats') or {}
+        elapsed_time = time.time() - stats.get('start_time', time.time())
+        _finalize_stats_callback({'elapsed_time': elapsed_time})
+
+        emit_update(socketio, translation_id, {
+            'status': 'interrupted',
+            'error': str(e),
+            'error_code': e.code,
+            'result': state_manager.get_translation_field(translation_id, 'result'),
+        }, state_manager)
+        await asyncio.to_thread(notify, EVENT_INTERRUPTION,
+            _notification_context(config, translation_id, elapsed_time))
+        socketio.emit('checkpoint_created', {
+            'translation_id': translation_id,
+            'status': 'interrupted',
+            # The browser resolves this key through t() at render time, so the
+            # log line follows a language switch instead of freezing the
+            # server's English wording.
+            'message_key': 'common:checkpoint_recognition_paused',
+            'message_params': {
+                'name': config.get('output_filename') or translation_id,
+            },
+        }, namespace='/')
+
     except Exception as e:
         critical_error_msg = f"Critical error during translation task ({translation_id}): {str(e)}"
         _log_message_callback("critical_error_perform_task", critical_error_msg)
@@ -1207,15 +1372,33 @@ async def perform_actual_translation(translation_id, config, state_manager, outp
         tb_str = traceback.format_exc()
         _log_message_callback("critical_error_perform_task_traceback", tb_str)
 
+        # Typed recognition/output failures carry a stable code so the Web UI
+        # can show a localized, actionable message instead of parsing English
+        # provider prose. Never a credential or signed URL.
+        error_code = getattr(e, 'code', None)
+        if not isinstance(error_code, str):
+            error_code = None
+
         if state_manager.exists(translation_id):
             state_manager.set_translation_field(translation_id, 'status', 'error')
             state_manager.set_translation_field(translation_id, 'error', critical_error_msg)
+            if error_code:
+                state_manager.set_translation_field(translation_id, 'error_code', error_code)
+            # PDF recovery data is deliberately retained: mark the row
+            # resumable now instead of leaving it 'running' until a restart
+            # sweeps it (the task-owned recognition files are the way back).
+            # Other formats keep their historical startup-sweep behavior.
+            if config.get('file_type') == 'pdf':
+                checkpoint_manager.mark_error(translation_id)
 
-            emit_update(socketio, translation_id, {
+            error_payload = {
                 'error': critical_error_msg,
                 'status': 'error',
                 'result': state_manager.get_translation_field(translation_id, 'result') or f"Translation failed: {critical_error_msg}"
-            }, state_manager)
+            }
+            if error_code:
+                error_payload['error_code'] = error_code
+            emit_update(socketio, translation_id, error_payload, state_manager)
 
             stats = state_manager.get_translation_field(translation_id, 'stats') or {}
             elapsed_time = time.time() - stats.get('start_time', time.time())
@@ -1344,4 +1527,12 @@ def start_translation_job(translation_id, config, state_manager, output_dir, soc
         args=(translation_id, config, state_manager, output_dir, socketio)
     )
     thread.daemon = True
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        # The job was created and holds its execution claim; a thread that
+        # never ran must not leave that claim behind until a process restart.
+        release = getattr(state_manager, 'release_execution', None)
+        if release is not None:
+            release(translation_id)
+        raise

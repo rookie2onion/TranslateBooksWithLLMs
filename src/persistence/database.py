@@ -2,13 +2,13 @@
 SQLite database manager for translation job persistence.
 """
 
-import sqlite3
 import json
 import os
-import time
-from typing import Optional, Dict, List, Any
-from datetime import datetime
+import sqlite3
 import threading
+import time
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 def sanitize_config_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -559,6 +559,28 @@ class Database:
                 return jobs
             except Exception as e:
                 print(f"Error getting job history: {e}")
+                return []
+
+    def get_expired_job_ids(self, max_age_days: int = 30) -> List[str]:
+        """IDs of every job the retention window has expired.
+
+        Includes ``completed`` rows: their task-owned working directory (and
+        therefore any retained recognition files) must be sweepable by the same
+        startup cleanup, even though a finished book's output and accounting
+        report live outside that directory and are not deleted by it.
+        """
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT translation_id FROM translation_jobs
+                    WHERE status IN ('paused', 'interrupted', 'error', 'partial', 'completed')
+                    AND created_at <= datetime('now', ? || ' days')
+                """, (f'-{max_age_days}',))
+                return [row['translation_id'] for row in cursor.fetchall()]
+            except Exception as e:
+                print(f"Error getting expired job ids: {e}")
                 return []
 
     def cleanup_old_jobs(self, max_age_days: int = 30) -> int:

@@ -2,7 +2,8 @@
 
 Seams under test:
 - A: ``src.core.mineru.cache.load_cache`` — cache validation and provenance binding.
-- B: ``src.core.mineru.structure.adapt`` — content model, reading order, exclusions.
+- B: ``src.core.mineru.structure.adapt`` — preview-neutral content model, reading
+  order, exclusions. Preview decoration is applied at the preview boundary.
 - C: ``src.core.mineru.pdf_preview.build_pdf_preview`` — real PDF plus provenance sidecar.
 """
 
@@ -101,21 +102,19 @@ def test_load_cache_rejects_page_mapping_mismatch(tmp_path):
 
 def test_load_cache_rejects_unsupported_block_type(tmp_path):
     root = build_cache(tmp_path / "cache")
-    _edit_v2(root, lambda pages: pages[0][0].update(type="table"))
+    _edit_v2(root, lambda pages: pages[0][0].update(type="chart"))
 
-    with pytest.raises(MineruCacheError, match="unsupported type 'table'"):
+    with pytest.raises(MineruCacheError, match="unsupported type 'chart'"):
         load_cache(root)
 
 
 def test_adapt_preserves_order_roles_and_excludes_running_matter(tmp_path):
     reconstruction = adapt(_load(tmp_path, source_pages=[1, 19]))
 
-    assert reconstruction.paragraphs[0].startswith(
-        "Untranslated MinerU reconstruction preview")
-    assert reconstruction.styles[1] == "heading1"
-    assert reconstruction.paragraphs[1] == "SAMPLE BOOK"
-    assert reconstruction.paragraphs[2] == "Ada Lovelace"
-    assert list(reconstruction.images_by_paragraph) == [2, 3]
+    assert reconstruction.paragraphs[0] == "SAMPLE BOOK"
+    assert reconstruction.styles[0] == "heading1"
+    assert reconstruction.paragraphs[1] == "Ada Lovelace"
+    assert list(reconstruction.images_by_paragraph) == [1, 2]
 
     body = reconstruction.paragraphs.index("The first body paragraph.")
     assert reconstruction.paragraphs[body + 1] == "Figure 1: a caption"
@@ -157,7 +156,7 @@ def test_adapt_exposes_image_assets_and_their_footnote(tmp_path):
 
     reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
 
-    asset = reconstruction.images_by_paragraph[2][0]
+    asset = reconstruction.images_by_paragraph[1][0]
     assert asset.data.startswith(b"\x89PNG")
     assert asset.ext == "png"
     assert (asset.width_pt, asset.height_pt) == pytest.approx((528.0, 320.0))
@@ -284,3 +283,42 @@ def test_build_pdf_preview_flags_review_when_structure_is_suspect(tmp_path):
     assert provenance["review_required"] is True
     codes = [finding["code"] for finding in provenance["findings"]]
     assert "header_outside_top_margin" in codes
+
+
+def test_adapt_excludes_a_running_page_footer(tmp_path):
+    pages = default_pages()
+    pages[0]["blocks"].append(
+        {"type": "page_footer", "text": "Running footer", "bbox": [60, 900, 500, 930]})
+
+    reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
+
+    footer = next(item for item in reconstruction.exclusions
+                  if item.kind == "running_footer")
+    assert footer.text == "Running footer"
+    assert "bottom margin" in footer.reason
+    assert reconstruction.counts["blocks_accounted"] == reconstruction.counts["blocks_seen"]
+
+
+def test_adapt_retains_a_page_footer_outside_the_bottom_margin(tmp_path):
+    pages = default_pages()
+    pages[0]["blocks"].append(
+        {"type": "page_footer", "text": "A note in the body area.",
+         "bbox": [60, 400, 500, 430]})
+
+    reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
+
+    assert "A note in the body area." in reconstruction.paragraphs
+    assert any(item.code == "footer_outside_bottom_margin"
+               for item in reconstruction.findings)
+    assert reconstruction.review_required is True
+
+
+def test_adapt_records_an_empty_page_footer(tmp_path):
+    pages = default_pages()
+    pages[0]["blocks"].append(
+        {"type": "page_footer", "text": "", "bbox": [60, 900, 500, 930]})
+
+    reconstruction = adapt(_load(tmp_path, pages=pages, source_pages=[1, 19]))
+
+    assert any(item.kind == "empty_record" and item.source_type == "page_footer"
+               for item in reconstruction.exclusions)

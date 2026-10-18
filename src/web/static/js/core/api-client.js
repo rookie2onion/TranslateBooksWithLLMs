@@ -44,7 +44,15 @@ async function handleApiError(response) {
     const label = errorData.error || '';
     const detail = errorData.message || '';
     const parts = [label, detail !== label ? detail : ''].filter(Boolean);
-    throw new Error(parts.join(' — ') || `Request failed with status ${response.status}`);
+    const error = new Error(parts.join(' — ') || `Request failed with status ${response.status}`);
+    // Stable machine-readable category (e.g. a typed PDF recognition failure)
+    // so callers can render a localized message instead of parsing English prose.
+    error.code = typeof errorData.code === 'string' ? errorData.code : null;
+    error.limits = errorData.limits && typeof errorData.limits === 'object'
+        ? errorData.limits
+        : null;
+    error.status = response.status;
+    throw error;
 }
 
 /**
@@ -200,6 +208,20 @@ export const ApiClient = {
      */
     getFileDownloadUrl(filename) {
         return withToken(`${API_BASE_URL}/api/files/${encodeURIComponent(filename)}`);
+    },
+
+    /**
+     * Download the durable content-accounting report of a finished task.
+     *
+     * The URL is a top-level navigation target (like a file download), so it
+     * carries the per-session token as a query parameter.
+     * @param {string} translationId - Translation task id
+     * @returns {string} Report download URL
+     */
+    getAccountingDownloadUrl(translationId) {
+        return withToken(
+            `${API_BASE_URL}/api/translation/${encodeURIComponent(translationId)}/accounting`
+        );
     },
 
     /**
@@ -784,4 +806,3 @@ export const ApiClient = {
         });
     }
 };
-

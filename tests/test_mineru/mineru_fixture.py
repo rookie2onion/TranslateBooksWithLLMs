@@ -20,9 +20,10 @@ SOURCE_SHA256 = "a" * 64
 SAMPLE_SHA256 = "b" * 64
 
 
-def _png_bytes(width: int = 40, height: int = 30) -> bytes:
+def _png_bytes(width: int = 40, height: int = 30,
+               color: tuple[int, int, int] = (200, 30, 30)) -> bytes:
     buffer = io.BytesIO()
-    Image.new("RGB", (width, height), (200, 30, 30)).save(buffer, format="PNG")
+    Image.new("RGB", (width, height), color).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -30,6 +31,32 @@ def _jpeg_bytes(width: int = 40, height: int = 30) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), (30, 30, 200)).save(buffer, format="JPEG")
     return buffer.getvalue()
+
+
+def table_block(path: str, bbox: list[float], *, caption: str = "",
+                footnote: str = "", html: str = "<table><tr><td>Cell</td></tr></table>",
+                table_type: str = "simple_table", nest_level: int = 1,
+                color: tuple[int, int, int] = (30, 90, 200),
+                asset: bytes | None = None) -> dict:
+    """A V2 ``table`` block (contract from MinerU 3.4.4; see online_fixtures)."""
+    return {
+        "type": "table", "path": path, "bbox": bbox,
+        "caption": [{"type": "text", "content": caption}] if caption else [],
+        "footnote": [{"type": "text", "content": footnote}] if footnote else [],
+        "html": html, "table_type": table_type, "nest_level": nest_level,
+        "color": color, "asset": asset,
+    }
+
+
+def equation_block(path: str, bbox: list[float], *, math: str = "E = mc^2",
+                   math_type: str = "latex",
+                   color: tuple[int, int, int] = (200, 40, 40),
+                   asset: bytes | None = None) -> dict:
+    """A V2 ``equation_interline`` block (contract from MinerU 3.4.4)."""
+    return {
+        "type": "equation_interline", "path": path, "bbox": bbox,
+        "math": math, "math_type": math_type, "color": color, "asset": asset,
+    }
 
 
 def default_pages() -> list[dict]:
@@ -81,10 +108,30 @@ def _v2_block(spec: dict) -> dict:
                             "content": spec.get("text", ""),
                             "image_caption": spec.get("caption", []),
                             "image_footnote": spec.get("footnote", [])}}
+    if kind == "table":
+        return {"type": "table", "bbox": bbox, "content": {
+            "image_source": {"path": spec["path"]},
+            "table_caption": spec.get("caption", []),
+            "table_footnote": spec.get("footnote", []),
+            "html": spec["html"],
+            "table_type": spec["table_type"],
+            "table_nest_level": spec["nest_level"],
+        }}
+    if kind == "equation_interline":
+        return {"type": "equation_interline", "bbox": bbox, "content": {
+            "math_content": spec["math"],
+            "math_type": spec["math_type"],
+            "image_source": {"path": spec["path"]},
+        }}
     payload = {"type": "text", "content": spec["text"]}
     key = {"page_footnote": "page_footnote_content",
            "page_header": "page_header_content",
-           "page_number": "page_number_content"}[kind]
+           "page_footer": "page_footer_content",
+           "page_number": "page_number_content"}.get(kind)
+    if key is None:
+        # An unsupported recognised block type: the loader must reject it
+        # explicitly rather than omit it silently.
+        return {"type": kind, "bbox": bbox, "content": {}}
     return {"type": kind, "bbox": bbox, "content": {key: [payload]}}
 
 
@@ -92,6 +139,12 @@ def _layout_block(spec: dict, index: int) -> dict:
     points = _points(spec["bbox"])
     if spec["type"] == "image":
         return {"type": "image", "bbox": points, "index": index, "lines": []}
+    if spec["type"] == "table":
+        return {"type": "table", "bbox": points, "index": index,
+                "blocks": [{"type": "table_body", "bbox": points, "lines": []}]}
+    if spec["type"] == "equation_interline":
+        return {"type": "interline_equation", "bbox": points, "index": index,
+                "lines": []}
     text = spec["text"]
     block = {"type": "title" if spec["type"] == "title" else "text",
              "bbox": points, "index": index,
@@ -126,15 +179,24 @@ def build_cache(root: Path, pages: list[dict] | None = None,
     (root / "images" / "fig1.png").write_bytes(_png_bytes())
     (root / "images" / "fig2.jpg").write_bytes(_jpeg_bytes())
     (root / "sample.pdf").write_bytes(_sample_pdf_bytes(len(pages)))
+    for page in pages:
+        for spec in page["blocks"]:
+            if spec["type"] not in ("table", "equation_interline"):
+                continue
+            target = root / spec["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(spec["asset"] or _png_bytes(
+                80, 60, spec.get("color", (30, 90, 200))))
 
     v2 = [[_v2_block(spec) for spec in page["blocks"]] for page in pages]
     (root / "abc_content_list_v2.json").write_text(
         json.dumps(v2, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    visual_types = ("title", "paragraph", "image", "table", "equation_interline")
     layout_pages = []
     for index, page in enumerate(pages):
         kept = [_layout_block(spec, i) for i, spec in enumerate(page["blocks"])
-                if spec["type"] in ("title", "paragraph", "image")]
+                if spec["type"] in visual_types]
         discarded = [_layout_block(spec, i) for i, spec in enumerate(page["blocks"])
                      if spec["type"] in ("page_header", "page_footnote", "page_number")]
         layout_pages.append({

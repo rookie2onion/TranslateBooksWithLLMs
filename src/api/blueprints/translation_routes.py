@@ -1,32 +1,79 @@
 """
 Translation job management routes
 """
+import copy
 import logging
 import os
 import re
 import time
-import copy
 from pathlib import Path
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request, send_file
 
 import src.config as _config
-from src.api.services.path_validator import PathValidator
+from src.api.api_keys import USE_ENV_SENTINEL
+from src.api.api_keys import provider_env_var as _provider_env_var
+from src.api.api_keys import resolve_api_key as _resolve_api_key
 from src.api.services.endpoint_validator import EndpointValidator
+from src.api.services.path_validator import PathValidator
 from src.config import (
-    REQUEST_TIMEOUT,
-    OLLAMA_NUM_CTX,
     AUTO_PAUSE_ON_RATE_LIMIT,
-    PARALLEL_TRANSLATIONS,
     MAX_PARALLEL_TRANSLATIONS,
+    OLLAMA_NUM_CTX,
+    PARALLEL_TRANSLATIONS,
+    REQUEST_TIMEOUT,
 )
+from src.core.mineru.admission import admit_pdf_source
+from src.core.mineru.errors import (
+    MineruAuthorizationRequired,
+    MineruByteLimit,
+    MineruError,
+    MineruPageLimit,
+    MineruPdfEncrypted,
+    MineruPdfUnreadable,
+    MineruTokenMissing,
+)
+from src.core.pdf.accounting import accounting_path_for, read_accounting_summary
 from src.tts.tts_config import TTSConfig
-from src.api.api_keys import (
-    resolve_api_key as _resolve_api_key,
-    provider_env_var as _provider_env_var,
-    USE_ENV_SENTINEL,
-)
 
 logger = logging.getLogger('translation_routes')
+
+
+# Short English labels pairing each typed recognition failure with its stable
+# code. The Web interface resolves the code into a localized message; the label
+# is a developer/API fallback, never a credential or a provider URL.
+_MINERU_ERROR_LABELS = {
+    MineruAuthorizationRequired.code: "MinerU upload authorization required",
+    MineruTokenMissing.code: "MinerU is not configured",
+    MineruPdfUnreadable.code: "PDF cannot be read",
+    MineruPdfEncrypted.code: "PDF is password-protected",
+    MineruPageLimit.code: "PDF exceeds the recognition page limit",
+    MineruByteLimit.code: "PDF exceeds the recognition size limit",
+}
+
+
+def _admit_pdf_request(safe_path, data):
+    """Validate a PDF task request at the server boundary.
+
+    Requires the task's explicit upload authorization, a configured MinerU
+    token and a readable, unencrypted PDF within the recognition limits. All
+    checks run before a job (and therefore any provider request) can exist.
+
+    Returns a Flask (response, status) tuple to abort with, or None on success.
+    """
+    authorized = data.get('mineru_authorized') is True
+    try:
+        admit_pdf_source(
+            safe_path,
+            authorized=authorized,
+            token=_config.mineru_api_token(),
+        )
+    except MineruError as exc:
+        payload = {"error": _MINERU_ERROR_LABELS.get(exc.code, "PDF recognition rejected")}
+        payload.update(exc.to_payload())
+        logger.warning("Rejected PDF translation request (%s): %s", exc.code, exc.message)
+        return jsonify(payload), 400
+    return None
 
 
 def _clamp_parallel_workers(value):
@@ -197,15 +244,41 @@ _HISTORY_FIELDS = (
 )
 
 
-def _history_item(job):
+def _history_item(job, output_dir=None):
     """Project a completed job onto the fields the browser is allowed to see.
 
     Built as an allowlist, never by deleting keys from a copy of the job: the
     stored config carries the server's filesystem layout ('file_path'), the
     provider endpoints and the API keys resolved from .env, and a denylist
     would silently leak whatever field gets added to it next (issue #271).
+
+    ``accounting_available`` is derived server-side from the output/report pair,
+    so the browser learns whether a durable report can be downloaded without
+    receiving a server filesystem path.
     """
-    return {field: job.get(field) for field in _HISTORY_FIELDS}
+    item = {field: job.get(field) for field in _HISTORY_FIELDS}
+    config = job.get('config') or {}
+    item['accounting_available'] = bool(
+        output_dir
+        and _accounting_report_path(output_dir, config.get('output_filename'))
+    )
+    return item
+
+
+def _accounting_report_path(output_dir, output_filename):
+    """Return the durable report path when the output and report both exist."""
+    if not output_filename or not output_dir:
+        return None
+    name = Path(str(output_filename)).name
+    if name != str(output_filename):
+        return None
+    output_path = Path(output_dir) / name
+    if not PathValidator.is_within_directory(output_path, output_dir):
+        return None
+    report_path = accounting_path_for(output_path)
+    if output_path.is_file() and report_path.is_file():
+        return report_path
+    return None
 
 
 def _validate_provider_credentials(config):
@@ -423,9 +496,28 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             )
             if path_error is not None:
                 return jsonify({"error": path_error}), 403
+            requested_type = data['file_type']
+            if requested_type == 'pdf' or safe_path.suffix.lower() == '.pdf':
+                # PDF recognition is online-only and uploads the document to a
+                # third party: this is the server-side half of the explicit
+                # per-task authorization boundary (the core submission path
+                # checks it again). Selecting/uploading a file never grants it.
+                admission_error = _admit_pdf_request(safe_path, data)
+                if admission_error is not None:
+                    return admission_error
+                config['mineru_authorized'] = True
+                config['file_type'] = 'pdf'
+            else:
+                config['file_type'] = requested_type
             config['file_path'] = str(safe_path)
-            config['file_type'] = data['file_type']
         else:
+            if data.get('file_type') == 'pdf':
+                return jsonify({
+                    "error": "PDF translation requires an uploaded PDF file",
+                    "code": MineruPdfUnreadable.code,
+                    "message": ("A PDF cannot be translated from inline text. "
+                                "Upload the PDF first."),
+                }), 400
             config['text'] = data['text']
             config['file_type'] = data.get('file_type', 'txt')
 
@@ -459,8 +551,14 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         # Create translation in state manager
         state_manager.create_translation(translation_id, config)
 
-        # Start translation job
-        start_translation_job(translation_id, config)
+        # Start translation job. The new job already holds its single execution
+        # claim; if the worker cannot even be started, release it so a later
+        # Continue is not refused forever by an abandoned in-memory claim.
+        try:
+            start_translation_job(translation_id, config)
+        except Exception:
+            state_manager.release_execution(translation_id)
+            raise
 
         return jsonify({
             "translation_id": translation_id,
@@ -490,6 +588,7 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         else:
             elapsed = stats.get('elapsed_time', time.time() - stats.get('start_time', time.time()))
 
+        output_path = job_data.get('output_filepath')
         return jsonify({
             "translation_id": translation_id,
             "status": job_data.get('status'),
@@ -499,13 +598,22 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
                 'completed_chunks': stats.get('completed_chunks', 0),
                 'failed_chunks': stats.get('failed_chunks', 0),
                 'start_time': stats.get('start_time'),
-                'elapsed_time': elapsed
+                'elapsed_time': elapsed,
+                # Set while online recognition is in flight, so queued/
+                # submitted recognition is not mistaken for translation.
+                'recognition_phase': stats.get('recognition_phase'),
             },
             "logs": job_data.get('logs', [])[-100:],
             "result_preview": "[Preview functionality removed. Download file to view content.]" if job_data.get('status') in ['completed', 'interrupted', 'partial'] else None,
             "error": job_data.get('error'),
+            # Stable category for localized UI text; never the raw provider
+            # prose and never a credential or signed URL.
+            "error_code": job_data.get('error_code'),
+            # What actually completed, read from the durable sidecar next to the
+            # output. None until a validated PDF exists.
+            "accounting": read_accounting_summary(output_path) if output_path else None,
             "config": _strip_api_keys(dict(job_data['config'])) if job_data.get('config') else None,
-            "output_filepath": job_data.get('output_filepath')
+            "output_filepath": output_path
         })
 
     @bp.route('/api/translation/<translation_id>/interrupt', methods=['POST'])
@@ -569,7 +677,9 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             return jsonify({"error": "Invalid limit"}), 400
 
         jobs = state_manager.checkpoint_manager.get_job_history(limit)
-        return jsonify({"history": [_history_item(job) for job in jobs]})
+        return jsonify({
+            "history": [_history_item(job, output_dir) for job in jobs]
+        })
 
     @bp.route('/api/resume/<translation_id>', methods=['POST'])
     def resume_translation_job_endpoint(translation_id):
@@ -599,66 +709,64 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
         if not checkpoint_data:
             return jsonify({"error": "No checkpoint found for this translation"}), 404
 
-        # Restore job into state manager
-        restored = state_manager.restore_job_from_checkpoint(translation_id)
-        if not restored:
-            return jsonify({"error": "Failed to restore job from checkpoint"}), 500
+        # Claim this job's single active execution *before* restoring or
+        # starting it. Two concurrent Continue requests (or a double click) can
+        # both pass the global active-job check above; only one acquires this
+        # claim, so at most one worker can re-open the saved recognition task
+        # and no duplicate provider submission is possible.
+        if not state_manager.claim_execution(translation_id):
+            return jsonify({
+                "error": "Cannot resume: this job is already running",
+                "message": "This job already has an active execution; wait for "
+                           "it to pause or finish before continuing it again.",
+                "active_translations": [{
+                    "id": translation_id,
+                    "status": "running",
+                    "output_filename": checkpoint_data['job'].get('config', {}).get(
+                        'output_filename', 'unknown'),
+                }],
+            }), 409
 
-        # Get job config and add resume parameters
-        job = checkpoint_data['job']
-        config = copy.deepcopy(job['config'])  # Create a deep copy to avoid mutating the stored config
+        try:
+            return _start_resumed_job(
+                translation_id, checkpoint_data, state_manager,
+                start_translation_job, request)
+        except Exception:
+            state_manager.release_execution(translation_id)
+            raise
 
-        # Get preserved input file path if exists
-        # Always use preserved_input_path from config (stored during job creation)
-        # This ensures consistent file path across multiple resume cycles
-        preserved_path = config.get('preserved_input_path')
-        if preserved_path:
-            # Verify that the preserved file actually exists
-            from pathlib import Path
-            if Path(preserved_path).exists():
-                config['file_path'] = preserved_path
-            else:
-                return jsonify({
-                    "error": "Preserved input file not found",
-                    "message": f"The preserved input file for this job no longer exists: {preserved_path}",
-                    "suggestion": "This job cannot be resumed. Please delete this checkpoint and start a new translation."
-                }), 404
+    @bp.route('/api/translation/<translation_id>/accounting', methods=['GET'])
+    def download_accounting_report(translation_id):
+        """Download the durable content-accounting report of a finished PDF.
+
+        The report lives next to the translated output, outside the pruned
+        working cache. It is only served while its output still exists, so a
+        sidecar can never be presented as proof of a book the user has deleted.
+        """
+        config = {}
+        job = state_manager.get_translation(translation_id)
+        if job and isinstance(job.get('config'), dict):
+            config = job['config']
         else:
-            # Fallback: try to get it from checkpoint manager
-            preserved_path_fallback = state_manager.checkpoint_manager.get_preserved_input_path(translation_id)
-            if preserved_path_fallback:
-                config['file_path'] = preserved_path_fallback
-            else:
-                return jsonify({
-                    "error": "No preserved input file",
-                    "message": "This job has no preserved input file and cannot be resumed.",
-                    "suggestion": "Please delete this checkpoint and start a new translation."
-                }), 404
-
-        # Add resume parameters to config
-        config['resume_from_index'] = checkpoint_data['resume_from_index']
-        config['is_resume'] = True
-
-        # Optional model/provider overrides for the remaining chunks (issue #183).
-        # No body = unchanged behavior.
-        overrides = request.get_json(silent=True) or {}
-        override_error = _apply_resume_overrides(config, overrides)
-        if override_error is not None:
-            return override_error
-
-        # Mark as running in database
-        state_manager.checkpoint_manager.mark_running(translation_id)
-
-        # Start the translation job (the wrapper will inject dependencies)
-        start_translation_job(translation_id, config)
-
-        return jsonify({
-            "translation_id": translation_id,
-            "message": "Translation resumed successfully",
-            "resume_from_chunk": checkpoint_data['resume_from_index'],
-            "model": config.get('model'),
-            "llm_provider": config.get('llm_provider')
-        }), 200
+            row = state_manager.checkpoint_manager.get_job(translation_id)
+            if row and isinstance(row.get('config'), dict):
+                config = row['config']
+        report_path = _accounting_report_path(
+            output_dir, config.get('output_filename') if config else None)
+        if report_path is None:
+            return jsonify({
+                "error": "Accounting report not found",
+                "message": "No durable report is available for this task's "
+                           "translated output.",
+            }), 404
+        filename = config.get('output_filename') or report_path.name
+        download_name = f"{Path(filename).stem}.accounting.json"
+        return send_file(
+            str(report_path),
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=download_name,
+        )
 
     @bp.route('/api/checkpoint/<translation_id>', methods=['DELETE'])
     def delete_checkpoint_endpoint(translation_id):
@@ -674,3 +782,96 @@ def create_translation_blueprint(state_manager, start_translation_job, output_di
             return jsonify({"error": "Failed to delete checkpoint or checkpoint not found"}), 404
 
     return bp
+
+
+def _start_resumed_job(translation_id, checkpoint_data, state_manager,
+                       start_translation_job, request):
+    """Restore a checkpoint's job and start its worker (claim already held).
+
+    Every failure path releases the execution claim before returning, so a
+    rejected continuation never leaves the job permanently un-continuable.
+    """
+    restored = state_manager.restore_job_from_checkpoint(translation_id)
+    if not restored:
+        state_manager.release_execution(translation_id)
+        return jsonify({"error": "Failed to restore job from checkpoint"}), 500
+
+    # Get job config and add resume parameters
+    job = checkpoint_data['job']
+    config = copy.deepcopy(job['config'])  # Create a deep copy to avoid mutating the stored config
+
+    # Get preserved input file path if exists
+    # Always use preserved_input_path from config (stored during job creation)
+    # This ensures consistent file path across multiple resume cycles
+    preserved_path = config.get('preserved_input_path')
+    if preserved_path:
+        # Verify that the preserved file actually exists
+        from pathlib import Path
+        if Path(preserved_path).exists():
+            config['file_path'] = preserved_path
+        else:
+            state_manager.release_execution(translation_id)
+            return jsonify({
+                "error": "Preserved input file not found",
+                "message": f"The preserved input file for this job no longer exists: {preserved_path}",
+                "suggestion": "This job cannot be resumed. Please delete this checkpoint and start a new translation."
+            }), 404
+    else:
+        # Fallback: try to get it from checkpoint manager
+        preserved_path_fallback = state_manager.checkpoint_manager.get_preserved_input_path(translation_id)
+        if preserved_path_fallback:
+            config['file_path'] = preserved_path_fallback
+        else:
+            state_manager.release_execution(translation_id)
+            return jsonify({
+                "error": "No preserved input file",
+                "message": "This job has no preserved input file and cannot be resumed.",
+                "suggestion": "Please delete this checkpoint and start a new translation."
+            }), 404
+
+    # Add resume parameters to config
+    config['resume_from_index'] = checkpoint_data['resume_from_index']
+    config['is_resume'] = True
+
+    # Optional model/provider overrides for the remaining chunks (issue #183).
+    # No body = unchanged behavior.
+    overrides = request.get_json(silent=True) or {}
+    override_error = _apply_resume_overrides(config, overrides)
+    if override_error is not None:
+        state_manager.release_execution(translation_id)
+        return override_error
+
+    # A PDF continuation re-opens its saved recognition task instead of
+    # registering a replacement task. Report that fact so the existing task UI
+    # can label the action as a continuation.
+    continues_recognition = _continues_recognition(
+        state_manager.checkpoint_manager, translation_id, config)
+
+    # Mark as running in database
+    state_manager.checkpoint_manager.mark_running(translation_id)
+
+    # Start the translation job (the wrapper will inject dependencies)
+    start_translation_job(translation_id, config)
+
+    return jsonify({
+        "translation_id": translation_id,
+        "message": "Translation resumed successfully",
+        "resume_from_chunk": checkpoint_data['resume_from_index'],
+        "model": config.get('model'),
+        "llm_provider": config.get('llm_provider'),
+        "continues_recognition": continues_recognition,
+    }), 200
+
+
+def _continues_recognition(checkpoint_manager, translation_id, config):
+    """True when continuing this task must re-open a saved recognition record."""
+    if config.get('file_type') != 'pdf':
+        return False
+    load = getattr(checkpoint_manager, 'load_recognition_state', None)
+    if load is None:
+        return False
+    try:
+        state = load(translation_id)
+    except Exception:
+        return False
+    return bool(state is not None and state.batch_id and state.phase != 'validated')

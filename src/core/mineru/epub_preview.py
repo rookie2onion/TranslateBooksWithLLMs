@@ -16,15 +16,12 @@ from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 from xml.sax.saxutils import escape
 
+from src.utils.atomic_io import atomic_path, write_json_atomic
+
 from .cache import MineruCache
-from .export import (
-    MineruExportError,
-    atomic_path,
-    ensure_output_outside_cache,
-    write_json_atomic,
-)
+from .export import MineruExportError, ensure_output_outside_cache
 from .provenance import build_provenance
-from .structure import ImageAsset, Reconstruction, adapt
+from .structure import ImageAsset, Reconstruction, adapt, apply_preview_decoration
 
 EPUB_MIMETYPE = "application/epub+zip"
 FIXED_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
@@ -83,7 +80,7 @@ def build_epub_preview(cache: MineruCache, output_dir: Path, *,
         raise MineruExportError(
             f"Language {language!r} is not a BCP-47 language tag; pass --language explicitly.")
 
-    reconstruction = adapt(cache)
+    reconstruction = apply_preview_decoration(cache, adapt(cache))
     document_title = title or reconstruction.title
     if not document_title:
         raise MineruExportError(

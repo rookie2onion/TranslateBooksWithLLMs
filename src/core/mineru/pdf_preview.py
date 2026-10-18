@@ -12,16 +12,12 @@ from pathlib import Path
 from typing import Dict
 
 from src.core.pdf import build_pdf
+from src.utils.atomic_io import atomic_path, write_json_atomic
 
 from .cache import MineruCache
-from .export import (
-    MineruExportError,
-    atomic_path,
-    ensure_output_outside_cache,
-    write_json_atomic,
-)
+from .export import MineruExportError, ensure_output_outside_cache
 from .provenance import build_provenance
-from .structure import adapt
+from .structure import adapt, apply_preview_decoration
 
 # Only used for RTL detection; the preview reproduces the source text unchanged.
 NEUTRAL_LANGUAGE = "en"
@@ -45,7 +41,7 @@ def build_pdf_preview(cache: MineruCache, output_dir: Path) -> PdfPreviewResult:
     output_dir = Path(output_dir)
     ensure_output_outside_cache(output_dir, cache.root)
 
-    reconstruction = adapt(cache)
+    reconstruction = apply_preview_decoration(cache, adapt(cache))
     content = reconstruction.to_plain_content()
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -67,6 +67,9 @@
   "state_desync_syncing": "Status-Desynchronisation erkannt: Auftrag {{status}} auf Server, aber UI noch aktiv. Wird synchronisiert...",
   "translation_job_missing": "Übersetzungsauftrag existiert nicht mehr auf dem Server. UI wird zurückgesetzt.",
   "checkpoint_created_default": "Checkpoint erstellt",
+  "checkpoint_recognition_paused": "Die Erkennung für {{name}} wurde lokal pausiert. Die gespeicherte MinerU-Aufgabe kann fortgesetzt werden, ohne die PDF erneut hochzuladen.",
+  "checkpoint_translation_paused": "Die Übersetzung für {{name}} wurde pausiert; Checkpoint erstellt.",
+  "checkpoint_rate_limited": "Die Übersetzung für {{name}} wurde nach einer Ratenbegrenzung pausiert; Checkpoint erstellt.",
 
   "sending": "Wird gesendet...",
   "test_sent_default": "Test gesendet.",

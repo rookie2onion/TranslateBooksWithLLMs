@@ -17,6 +17,7 @@ import { renderTranslationTitle } from './progress-title.js';
 import { FileUpload, generateOutputFilename } from '../files/file-upload.js';
 import { TranslationTracker } from './translation-tracker.js';
 import { PreflightModal } from '../ui/preflight-modal.js';
+import { resolveMineruError } from './mineru-errors.js';
 import { t } from '../i18n/i18n.js';
 
 /**
@@ -27,6 +28,38 @@ function earlyValidationFail(message) {
     MessageLogger.showMessage(message, 'error');
     MessageLogger.addLog(t('translation:validation_failed_log', { message }));
     return false;
+}
+
+
+/**
+ * Is the queue holding at least one PDF that still needs to be started?
+ * @param {Array<Object>} files - Queue from StateManager
+ * @returns {boolean}
+ */
+function hasQueuedPdf(files) {
+    return (files || []).some(file => file.status === 'Queued' && file.fileType === 'pdf');
+}
+
+
+/**
+ * Show the brief PDF upload disclosure only when a PDF is queued. Consent
+ * itself is per task and lives on each queued PDF's own checkbox.
+ */
+export function refreshMineruAuthorization() {
+    const container = DomHelpers.getElement('mineruAuthorization');
+    if (!container) return;
+    const files = StateManager.getState('files.toProcess') || [];
+    container.hidden = !hasQueuedPdf(files);
+}
+
+// The queue is restored, edited and advanced from several modules; every one of
+// those paths emits one of these signals.
+window.addEventListener('fileListChanged', refreshMineruAuthorization);
+window.addEventListener('fileStatusChanged', refreshMineruAuthorization);
+window.addEventListener('localeChanged', refreshMineruAuthorization);
+StateManager.subscribe('translation.isBatchActive', () => refreshMineruAuthorization());
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', refreshMineruAuthorization);
 }
 
 
@@ -128,6 +161,13 @@ function getTranslationConfig(file) {
         }
     }
 
+    // PDF is recognized online only, so each task carries its own explicit
+    // upload authorization, granted by that file's checkbox. A missing value
+    // stays false: the server then refuses the job.
+    if (file.fileType === 'pdf') {
+        config.mineru_authorized = file.mineruAuthorized === true;
+    }
+
     return config;
 }
 
@@ -220,6 +260,17 @@ export const BatchController = {
 
         if (filesUpdated) {
             StateManager.setState('files.toProcess', filesToProcess);
+        }
+
+        // Online PDF recognition sends the document to a third party. Each
+        // queued PDF must carry its own explicit authorization tick: the
+        // consent is granted per task, never for the whole batch. The server
+        // re-checks the per-task flag at its admission boundary.
+        const unauthorizedPdf = filesToProcess.find(
+            file => file.status === 'Queued' && file.fileType === 'pdf'
+                && file.mineruAuthorized !== true);
+        if (unauthorizedPdf) {
+            return earlyValidationFail(t('translation:mineru_authorization_required'));
         }
 
         // Last chance to adjust the per-run options. Placed after validation so a
@@ -333,6 +384,9 @@ export const BatchController = {
             TranslationTracker.registerOwnedJob(data.translation_id);
 
             fileToTranslate.translationId = data.translation_id;
+            // The task-level consent was consumed by this submission; a later
+            // run needs a fresh tick.
+            fileToTranslate.mineruAuthorized = false;
             updateFileStatusInList(fileToTranslate.name, 'Submitted', data.translation_id);
 
             DomHelpers.show('progressSection');
@@ -353,8 +407,12 @@ export const BatchController = {
             window.dispatchEvent(event);
 
         } catch (error) {
-            MessageLogger.addLog(t('translation:init_error_log', { name: fileToTranslate.name, error: error.message }));
-            MessageLogger.showMessage(t('translation:init_error_msg', { name: fileToTranslate.name, error: error.message }), 'error');
+            // A typed PDF failure carries a stable code; render it in the active
+            // UI language. Anything else keeps the server's own detail.
+            const failureText = resolveMineruError(error.code, { limits: error.limits })
+                || error.message;
+            MessageLogger.addLog(t('translation:init_error_log', { name: fileToTranslate.name, error: failureText }));
+            MessageLogger.showMessage(t('translation:init_error_msg', { name: fileToTranslate.name, error: failureText }), 'error');
             updateFileStatusInList(fileToTranslate.name, 'Initiation Error');
             StateManager.setState('translation.currentJob', null);
             this.processNextFileInQueue();

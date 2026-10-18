@@ -155,6 +155,10 @@ export const FileUpload = {
         this.setupFileInput();
         this.setupLanguageSyncListeners();
         this.setupDefaultConfigListener();
+        // Queue rows are rendered with t(); rebuild them on a language switch
+        // so the per-file labels (including the PDF authorization control)
+        // follow without a page reload.
+        window.addEventListener('localeChanged', () => this.updateFileDisplay());
         // Restore file queue from localStorage synchronously first
         // This ensures files are available immediately on page load
         this.restoreFileQueueSync();
@@ -1100,6 +1104,30 @@ export const FileUpload = {
         wrap.className = 'file-item-controls';
 
         const op = file.operation || 'translate';
+
+        // Online PDF recognition uploads the document to a third party. This
+        // task's explicit consent is its own tick, consumed when the task
+        // starts; a batch-level tick is never enough.
+        if (file.fileType === 'pdf') {
+            const consentLabel = document.createElement('label');
+            consentLabel.className = 'file-mineru-consent';
+            consentLabel.title = t('translation:mineru_authorization_description');
+            const consent = document.createElement('input');
+            consent.type = 'checkbox';
+            consent.checked = file.mineruAuthorized === true;
+            consent.onclick = (e) => e.stopPropagation();
+            consent.onchange = (e) => {
+                e.stopPropagation();
+                this._updateFileField(
+                    file.name, 'mineruAuthorized', consent.checked);
+            };
+            consentLabel.appendChild(consent);
+            consentLabel.appendChild(
+                document.createTextNode(
+                    ' ' + t('translation:mineru_task_authorization'))
+            );
+            wrap.appendChild(consentLabel);
+        }
 
         // Operation badge
         const badge = document.createElement('span');

@@ -9,6 +9,7 @@ import { StateManager } from '../core/state-manager.js';
 import { ApiClient } from '../core/api-client.js';
 import { MessageLogger } from '../ui/message-logger.js';
 import { DomHelpers } from '../ui/dom-helpers.js';
+import { resolveMineruError } from './mineru-errors.js';
 import { StatusManager } from '../utils/status-manager.js';
 import { FileUpload } from '../files/file-upload.js';
 import { FileActions } from '../files/file-actions.js';
@@ -601,8 +602,15 @@ export const TranslationTracker = {
             this.updateActiveTranslationsState();
         } else if (data.status === 'interrupted') {
             MessageLogger.resetProgressTracking();
+            // A local recognition pause/stop stays a pause: when the server
+            // carries a stable recognition code, say why it paused (budget or
+            // cooperative stop) instead of implying remote cancellation.
+            const pauseReason = resolveMineruError(data.error_code);
             this.finishCurrentFileTranslation(
-                t('translation:translation_interrupted_msg', { name: currentFile.name }),
+                pauseReason
+                    ? t('translation:translation_paused_msg', {
+                        name: currentFile.name, reason: pauseReason })
+                    : t('translation:translation_interrupted_msg', { name: currentFile.name }),
                 'info',
                 data
             );
@@ -617,8 +625,12 @@ export const TranslationTracker = {
             this.updateActiveTranslationsState();
         } else if (data.status === 'error') {
             MessageLogger.resetProgressTracking();
+            // A typed online-recognition/output failure carries a stable code;
+            // render it in the active UI language instead of the English prose
+            // the server logs for developers.
+            const localizedFailure = resolveMineruError(data.error_code);
             this.finishCurrentFileTranslation(
-                t('translation:translation_error_msg', { name: currentFile.name, error: data.error || t('translation:translation_unknown_error') }),
+                t('translation:translation_error_msg', { name: currentFile.name, error: localizedFailure || data.error || t('translation:translation_unknown_error') }),
                 'error',
                 data
             );
@@ -840,12 +852,39 @@ export const TranslationTracker = {
             card.appendChild(warningBlock);
         }
 
+        // The durable report describes recognized-content coverage, not
+        // recognition accuracy or text inside preserved images. Say so on the
+        // card instead of letting the download imply a stronger claim.
+        if (resultData.accounting && file && file.fileType === 'pdf') {
+            const note = document.createElement('div');
+            note.className = 'completion-card__warning-note';
+            note.textContent = t('translation:completion_pdf_limitations');
+            card.appendChild(note);
+        }
+
         const actionsGroup = FileActions.createActionGroup({
             actions: ['download', 'open', 'reveal', 'files-tab'],
             filename: outputFilename,
             variant: 'labeled'
         });
         actionsGroup.classList.add('completion-card__actions');
+
+        // Report download is only offered when the durable sidecar exists; the
+        // completion payload carries its summary. The endpoint re-checks the
+        // output/report pair, so a deleted output yields an honest 404.
+        const translationId = resultData.translation_id
+            || (file && file.translationId) || '';
+        if (resultData.accounting && translationId) {
+            const reportButton = document.createElement('button');
+            reportButton.type = 'button';
+            reportButton.className = 'btn btn-secondary';
+            reportButton.innerHTML = '<span class="material-symbols-outlined">receipt_long</span> '
+                + t('translation:completion_download_report');
+            reportButton.addEventListener('click', () => {
+                window.location.href = ApiClient.getAccountingDownloadUrl(translationId);
+            });
+            actionsGroup.appendChild(reportButton);
+        }
         card.appendChild(actionsGroup);
 
         card.querySelector('.completion-card__close').addEventListener('click', () => {
@@ -991,6 +1030,30 @@ export const TranslationTracker = {
             items.push(formatElapsedTime(elapsed));
         }
 
+        // Whole-book coverage from the durable accounting, never inferred from
+        // output page counts. Older sidecars have no coverage section, so the
+        // chip is only shown when the report explicitly proves coverage.
+        const accounting = resultData.accounting || {};
+        const expectedPages = accounting.source_pages;
+        const recognizedPages = accounting.result_pages;
+        if (accounting.coverage_complete === true
+            && Number.isFinite(expectedPages)
+            && Number.isFinite(recognizedPages)
+            && Number.isFinite(accounting.recognized_blocks)
+            && Number.isFinite(accounting.accounted_blocks)) {
+            items.push(t('translation:completion_pdf_coverage', {
+                pages: recognizedPages,
+                expected: expectedPages,
+                accounted: accounting.accounted_blocks,
+                recognized: accounting.recognized_blocks,
+            }));
+        }
+        if (Number.isFinite(accounting.empty_pages) && accounting.empty_pages > 0) {
+            items.push(t('translation:completion_pdf_empty_pages', {
+                count: accounting.empty_pages,
+            }));
+        }
+
         if (failed > 0) {
             items.push(`<span class="completion-card__stat--error">${t('translation:completion_failed_chunks', { count: failed })}</span>`);
         }
@@ -999,6 +1062,15 @@ export const TranslationTracker = {
         // the failed-chunks chip rather than the `--warn` formatting ones.
         if (untranslated > 0) {
             items.push(`<span class="completion-card__stat--error">${t('translation:completion_warning_untranslated', { count: untranslated })}</span>`);
+        }
+
+        // Deliberately preserved source content (tables/formulas kept as
+        // source images). The durable accounting counts it separately from
+        // failed or unfinished translation chunks, so it is reported as policy
+        // information, never as an error.
+        const sourcePreserved = (resultData.accounting || {}).source_preserved || 0;
+        if (sourcePreserved > 0) {
+            items.push(t('translation:completion_source_preserved', { count: sourcePreserved }));
         }
 
         if (fallbacks > 0) {

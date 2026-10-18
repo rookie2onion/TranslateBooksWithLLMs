@@ -20,6 +20,38 @@ import {
 } from './model-override-panel.js';
 
 /**
+ * Recognition-specific note for a PDF job card, or an empty string.
+ *
+ * The saved recognition phase comes from the job's task-owned recovery data
+ * (server-side `get_resumable_jobs` enrichment). Every string goes through
+ * `t()` at render time and the list re-renders on `localeChanged`, so the note
+ * follows a UI language switch without a reload.
+ *
+ * @param {Object} job - Resumable job data
+ * @returns {string} HTML note or an empty string
+ */
+function recognitionHintHtml(job) {
+    const phase = job.recognition_phase;
+    const phaseKey = phase === 'timed_out'
+        ? 'translation:pdf_recognition_paused_budget'
+        : phase === 'interrupted_local'
+            ? 'translation:pdf_recognition_paused_stop'
+            : phase === 'validated'
+                ? 'translation:pdf_recognition_result_saved'
+                : phase
+                    ? 'translation:pdf_recognition_awaiting_continue'
+                    : null;
+    const lines = [];
+    if (phaseKey) lines.push(DomHelpers.escapeHtml(t(phaseKey)));
+    lines.push(DomHelpers.escapeHtml(t('translation:pdf_continue_hint')));
+    return `
+        <div class="pdf-continue-hint" style="margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: #eff6ff; border: 1px solid #bfdbfe; font-size: 12px; color: #1e3a8a; line-height: 1.5;">
+            ${lines.join('<br>')}
+        </div>
+    `;
+}
+
+/**
  * Format resumable job card HTML
  * @param {Object} job - Job data
  * @param {boolean} hasActiveTranslation - Whether there's an active translation
@@ -81,6 +113,13 @@ function formatJobCard(job, hasActiveTranslation, activeNames) {
     const resumeTitle = hasActiveTranslation
         ? t('translation:cannot_resume_in_progress_title')
         : t('translation:resume_btn_title');
+    // A PDF job continues its saved online-recognition task, so the existing
+    // task UI says "Continue" and explains that the PDF is not re-uploaded.
+    const isPdf = (job.file_type || '').toLowerCase() === 'pdf';
+    const resumeButtonLabel = isPdf
+        ? t('translation:job_card_continue_btn')
+        : t('translation:job_card_resume_btn');
+    const recognitionNote = isPdf ? recognitionHintHtml(job) : '';
 
     // Original model/provider, used to seed the override picker and to show what
     // the resumed portion would switch away from. Keys were already stripped
@@ -109,7 +148,7 @@ function formatJobCard(job, hasActiveTranslation, activeNames) {
                     <button class="btn btn-primary" onclick="resumeJob('${job.translation_id}')"
                             title="${resumeTitle}"
                             ${hasActiveTranslation ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''}>
-                        ${t('translation:job_card_resume_btn')}
+                        ${resumeButtonLabel}
                     </button>
                     <button class="btn btn-danger" onclick="deleteCheckpoint('${job.translation_id}')" title="${t('translation:job_card_delete_title')}">
                         ${t('translation:job_card_delete_btn')}
@@ -125,6 +164,8 @@ function formatJobCard(job, hasActiveTranslation, activeNames) {
                     <div style="width: ${progressPercent}%; background: #3b82f6; height: 100%; transition: width 0.3s;"></div>
                 </div>
             </div>
+
+            ${recognitionNote}
 
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 12px; color: #9ca3af;">
                 <div style="display: flex; gap: 20px;">
@@ -309,8 +350,14 @@ export const ResumeManager = {
 
             const data = await ApiClient.resumeJob(translationId, overrides);
 
+            // A PDF continuation re-opens its saved MinerU task rather than
+            // registering a replacement task; say so instead of reporting a
+            // translation chunk index.
+            const continuesRecognition = data.continues_recognition === true;
             MessageLogger.showMessage(
-                t('translation:resume_success', { chunk: data.resume_from_chunk }),
+                continuesRecognition
+                    ? t('translation:resume_recognition_success')
+                    : t('translation:resume_success', { chunk: data.resume_from_chunk }),
                 'success'
             );
             // The endpoint answers with the provider/model the resumed run will
@@ -329,6 +376,10 @@ export const ResumeManager = {
                     id: translationId, chunk: data.resume_from_chunk, model: modelLabel })
                 : t('translation:resume_success_log', {
                     id: translationId, chunk: data.resume_from_chunk }));
+
+            if (continuesRecognition) {
+                MessageLogger.addLog(t('translation:resume_recognition_success'));
+            }
 
             // Fetch job details to get filename and file type
             const jobData = await ApiClient.getTranslationStatus(translationId);

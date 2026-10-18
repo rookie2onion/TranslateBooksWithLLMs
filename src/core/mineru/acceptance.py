@@ -21,16 +21,21 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from xml.etree import ElementTree
 
+from src.utils.atomic_io import write_json_atomic
+from src.utils.hashing import sha256_file
+
 from .cache import KNOWN_BLOCK_TYPES, MineruCache
 from .epub_preview import image_resource_name
-from .export import MineruExportError, ensure_output_outside_cache, write_json_atomic
-from .structure import Reconstruction, adapt
+from .export import MineruExportError, ensure_output_outside_cache
+from .structure import Reconstruction, adapt, apply_preview_decoration
 
 SCHEMA_VERSION = 1
 XHTML = "{http://www.w3.org/1999/xhtml}"
 OPF = "{http://www.idpf.org/2007/opf}"
 _DC = "{http://purl.org/dc/elements/1.1/}"
-_CONTENT_TYPES = tuple(sorted(KNOWN_BLOCK_TYPES - {"image"}))
+_CONTENT_TYPES = tuple(sorted(
+    KNOWN_BLOCK_TYPES - {"image", "table", "equation_interline"}))
+_PRESERVED_KINDS = {"table": "table", "equation_interline": "formula"}
 _PARAGRAPH_TAGS = {f"{XHTML}h1", f"{XHTML}h2", f"{XHTML}h3", f"{XHTML}p"}
 
 
@@ -72,7 +77,7 @@ def build_acceptance_package(cache: MineruCache, pdf_dir: Path, epub_dir: Path,
         if not path.is_file():
             raise MineruExportError(f"Missing preview artifact: {path}")
 
-    reconstruction = adapt(cache)
+    reconstruction = apply_preview_decoration(cache, adapt(cache))
     pdf_pages = _pdf_paragraph_pages(pdf_path, reconstruction.paragraphs)
     checks: List[Check] = []
     checks.append(_check_artifacts(pdf_path, epub_path))
@@ -200,7 +205,7 @@ def _check_cache_unmodified(cache: MineruCache, pdf: Mapping[str, Any],
         path = cache.root / name
         if not path.is_file():
             problems.append(f"{name} is missing")
-        elif _sha256(path) != digest:
+        elif sha256_file(path) != digest:
             problems.append(f"{name} changed")
     return Check("cache_unmodified", "Cache files still match the recorded fingerprints",
                  "fail" if problems else "pass",
@@ -243,9 +248,19 @@ def _check_block_coverage(cache: MineruCache, pdf: Mapping[str, Any]) -> Check:
         rows.append(f"{content_type} {represented}/{total}")
         if represented != total:
             problems.append(f"{content_type} represents {represented} of {total}")
-    images = len(pdf.get("images", []))
+    images = len([image for image in pdf.get("images", [])
+                  if image.get("kind") == "image"])
     if images != seen.get("image", 0):
         problems.append(f"images {images}/{seen.get('image', 0)}")
+    preserved = {kind: sum(1 for image in pdf.get("images", [])
+                           if image.get("kind") == kind)
+                 for kind in _PRESERVED_KINDS.values()}
+    for block_type, kind in _PRESERVED_KINDS.items():
+        total = seen.get(block_type, 0)
+        represented = preserved.get(kind, 0)
+        rows.append(f"{block_type} {represented}/{total}")
+        if represented != total:
+            problems.append(f"{block_type} represents {represented} of {total}")
     return Check("block_coverage", "Each recognised content type is represented or excluded",
                  "fail" if problems else "pass",
                  "; ".join(problems) if problems else ", ".join(rows))
@@ -330,7 +345,7 @@ def _check_image_integrity(cache: MineruCache, pdf: Mapping[str, Any],
         path = cache.root / str(image.get("image_path"))
         if not path.is_file():
             problems.append(f"{image.get('image_path')} missing from the cache")
-        elif _sha256(path) != image.get("image_sha256"):
+        elif sha256_file(path) != image.get("image_sha256"):
             problems.append(f"{image.get('image_path')} hash differs")
     if pdf.get("pdf", {}).get("image_count") != len(pdf.get("images", [])):
         problems.append("PDF image count differs from provenance")
@@ -529,7 +544,7 @@ def _artifact_hashes(root: Path, exclude: Iterable[str]) -> Dict[str, str]:
         relative = path.relative_to(root).as_posix()
         if relative in excluded:
             continue
-        files[relative] = _sha256(path)
+        files[relative] = sha256_file(path)
     return files
 
 
@@ -538,11 +553,6 @@ def _copy(source: Path, destination: Path) -> None:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
-
-
-def _sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _report(cache: MineruCache, reconstruction: Reconstruction, checks: Sequence[Check],
