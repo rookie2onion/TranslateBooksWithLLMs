@@ -1,0 +1,15 @@
+# Index application source, not private artifacts, environments or generated files.
+.git/
+.code-review-graph/
+data/
+Sample/
+translated_files/
+.venv/
+venv/
+env/
+**/site-packages/**
+**/__pycache__/**
+**/node_modules/**
+*.env
+.env
+.env.*
