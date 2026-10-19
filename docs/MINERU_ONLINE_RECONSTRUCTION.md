@@ -60,6 +60,10 @@ written in that case.
   finding. Missing named images, unsafe paths, malformed content, and source
   identity mismatches still fail closed. Crops are bounded, fingerprinted, and
   checked on reuse; provider JSON is not rewritten.
+- Continuing a known completed remote batch first revalidates a fully downloaded
+  local `result.zip`, if present, instead of polling and downloading it again.
+  Invalid local archives remain explicit failures with no provider requests;
+  partial `.part` downloads are never treated as complete results.
 - Block provenance: sample index, source PDF page, bounding box and text hash.
 
 ## Exclusions, always recorded

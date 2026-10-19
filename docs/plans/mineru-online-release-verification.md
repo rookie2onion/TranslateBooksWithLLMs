@@ -372,8 +372,6 @@ no resubmission) and completed:
 - Private artifacts stay under Git-ignored storage; only redacted summaries are
   published.
 
-## Redaction and data handling
-
 ## Follow-up: authorized 198-page attempt (2026-10-19)
 
 The operator subsequently started the full 198-page document through the Web
@@ -399,7 +397,7 @@ figures prove accounting of this recognition result, not semantic accuracy or
 completed translation. Full-book translation and operator review remain a
 separate live outcome; the original twenty-page acceptance is historical.
 
-## Redaction and data handling (continued)
+## Redaction and data handling
 
 No credential, token, signed URL, provider payload, or private document content
 is included in this report. The synthetic PDFs, synthetic MinerU V2 archives,

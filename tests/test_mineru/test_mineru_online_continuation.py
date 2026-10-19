@@ -830,6 +830,48 @@ def test_continue_reports_an_unusable_saved_result_without_resubmitting(web):
     assert states, "the incomplete translation checkpoint was discarded"
 
 
+@pytest.mark.parametrize("corrupt_archive", [False, True])
+def test_continue_revalidates_the_downloaded_archive_without_provider_requests(
+        web, monkeypatch, corrupt_archive):
+    from src.core.mineru.errors import MineruResultInvalid
+
+    real_build = recognition_module.build_online_result
+    attempts = []
+
+    def reject_first_validation(*args, **kwargs):
+        result = real_build(*args, **kwargs)
+        attempts.append(result)
+        if len(attempts) == 1:
+            raise MineruResultInvalid("Synthetic validation failure after download.")
+        return result
+
+    monkeypatch.setattr(recognition_module, "build_online_result", reject_first_validation)
+    source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
+    web.http.zip_bytes = result_zip_bytes(page_count=1)
+    translation_id, first = web.start_and_wait(web.upload(source))
+    assert first["status"] == "error"
+    before = web.recognition_state(translation_id)
+    assert before.phase == "validating"
+    requests_before = len(web.http.requests)
+    archive = web.manager.recognition_dir(translation_id) / "result.zip"
+    assert archive.is_file()
+    if corrupt_archive:
+        archive.write_bytes(b"invalid archive")
+    assert web.resume(translation_id).status_code == 200
+    second = web.wait_for_terminal(translation_id)
+    assert len(web.http.requests) == requests_before
+    if corrupt_archive:
+        assert web.recognition_state(translation_id).batch_id == before.batch_id
+        assert second["status"] == "error"
+        assert second["error_code"] == "mineru_result_invalid"
+        assert archive.read_bytes() == b"invalid archive"
+    else:
+        assert second["status"] == "completed", second
+        assert web.download("book (French).pdf").status_code == 200
+        report = json.loads(_sidecar_path(web.output_dir, "book (French).pdf").read_text())
+        assert report["recognition"]["batch_id"] == before.batch_id
+
+
 def test_a_terminal_provider_failure_is_distinct_from_the_local_deadline(web):
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
     web.http.zip_bytes = result_zip_bytes(page_count=1)

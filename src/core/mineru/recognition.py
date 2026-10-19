@@ -350,7 +350,7 @@ def _run_continuation(
     progress: Optional[Callable[[str], None]],
     log: Optional[Callable[[str, str], None]],
 ) -> RecognitionResult:
-    """Re-poll and re-download a known remote task; never re-upload or submit."""
+    """Revalidate a complete local archive or continue the known remote task."""
     client = MineruClient(token, clock=clock, sleep=sleep)
     remote_states: List[str] = []
     base_elapsed = float(state.elapsed_seconds)
@@ -368,23 +368,45 @@ def _run_continuation(
         return state
 
     try:
-        _notify(progress, "continuing")
+        archive_path = workspace / "result.zip"
+        reuse_archive = state.remote_state == "done" and archive_path.is_file()
+        _notify(progress, "validating" if reuse_archive else "continuing")
         _log(log, "pdf_mineru_continuing",
+             "♻️ Revalidating the saved downloaded MinerU archive; no provider "
+             "request is needed." if reuse_archive else
              "↻ Continuing the saved MinerU task: checking the existing remote "
              "recognition result. The PDF is not uploaded again.")
         save(
-            phase="recognizing",
+            phase="validating" if reuse_archive else "recognizing",
             continuations=state.continuations + 1,
             error_code=None,
             error_message=None,
         )
-        online = _poll_download_validate(
-            client, state, admitted,
-            workspace=workspace, save=save, deadline=deadline,
-            poll_interval_seconds=poll_interval_seconds, clock=clock, sleep=sleep,
-            check_interruption=check_interruption, remote_states=remote_states,
-            progress=progress, log=log,
-        )
+        if reuse_archive:
+            if check_interruption is not None and check_interruption():
+                message = "Local recognition was stopped; the saved archive is preserved."
+                save(phase="interrupted_local", error_code=MineruInterrupted.code,
+                     error_message=message)
+                raise MineruInterrupted(message)
+            if clock() >= deadline:
+                _raise_timeout(save)
+            try:
+                online = build_online_result(
+                    archive_path, work_dir=workspace, admitted=admitted)
+            except MineruResultInvalid as exc:
+                save(error_code=exc.code, error_message=str(exc))
+                raise
+            if clock() >= deadline:
+                _raise_timeout(save)
+            remote_states.append("done")
+        else:
+            online = _poll_download_validate(
+                client, state, admitted,
+                workspace=workspace, save=save, deadline=deadline,
+                poll_interval_seconds=poll_interval_seconds, clock=clock, sleep=sleep,
+                check_interruption=check_interruption, remote_states=remote_states,
+                progress=progress, log=log,
+            )
         save(
             phase="validated",
             remote_state="done",
@@ -401,7 +423,7 @@ def _run_continuation(
              f"validated, {len(source.paragraphs)} source paragraphs. No "
              "submission or upload was repeated.")
         return _result(admitted, source, online, state.batch_id or "", started,
-                       clock, client.retries, remote_states, reused=False,
+                       clock, client.retries, remote_states, reused=reuse_archive,
                        continued=True)
     finally:
         client.close()
