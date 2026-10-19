@@ -17,12 +17,19 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Union
 
 from .acceptance import build_acceptance_package
 from .cache import MineruCache, MineruCacheError, load_cache
-from .epub_preview import DEFAULT_LANGUAGE, EpubPreviewResult, build_epub_preview
-from .export import MineruExportError
+from .epub_preview import (
+    DEFAULT_LANGUAGE,
+    EpubPreviewResult,
+    build_epub_preview,
+    build_original_epub,
+)
+from .export import MineruExportError, ensure_output_outside_cache
+from .local_result import load_local_result
 from .pdf_preview import PdfPreviewResult, build_pdf_preview
 
 Summary = dict
@@ -31,34 +38,56 @@ Summary = dict
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.core.mineru",
-        description="Reconstruct a cached MinerU online result as a source-language "
-                    "preview. No network access, no translation.",
+        description="Export a local MinerU result as an original-language EPUB, or "
+                    "reconstruct a cached sample preview. No network access, no translation.",
     )
-    parser.add_argument("--cache", required=True, type=Path,
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--input", type=Path,
+                        help="Local MinerU JSON or result directory for original-language EPUB export.")
+    inputs.add_argument("--cache", type=Path,
                         help="Authorized cached MinerU result directory.")
     parser.add_argument("--output-dir", required=True, type=Path,
-                        help="Directory for the preview artifact(s) and provenance; "
-                             "both mode creates pdf/ and epub/ subdirectories.")
-    parser.add_argument("--format", choices=("pdf", "epub", "both"), default="pdf",
-                        help="Output format (default: pdf; both builds the acceptance package).")
+                        help="Directory for artifacts and report, outside the input directory.")
+    parser.add_argument("--format", choices=("pdf", "epub", "both"), default=None,
+                        help="Default: epub for local input, pdf for cache previews.")
     parser.add_argument("--language", default=DEFAULT_LANGUAGE,
                         help="BCP-47 source language for EPUB metadata (default: und).")
     parser.add_argument("--title", default=None,
                         help="Explicit title override for EPUB metadata.")
+    parser.add_argument("--source-pdf", type=Path, default=None,
+                        help="Original PDF, verified against the bundle's unique *_origin.pdf.")
     parser.add_argument("--json", action="store_true",
                         help="Print the summary as one JSON object.")
     args = parser.parse_args(argv)
+    args.format = args.format or ("epub" if args.input is not None else "pdf")
+    if args.input is not None and args.format != "epub":
+        parser.error("Local --input exports EPUB only; --cache supports preview formats.")
+    result: Union[EpubPreviewResult, PdfPreviewResult]
 
     try:
-        cache = load_cache(args.cache)
+        if args.input is not None:
+            input_root = args.input if args.input.is_dir() else args.input.parent
+            ensure_output_outside_cache(args.output_dir, input_root)
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            with TemporaryDirectory(prefix=".mineru-", dir=args.output_dir) as working:
+                cache = load_local_result(args.input, source_pdf=args.source_pdf,
+                                          working_dir=Path(working).resolve())
+                result = build_original_epub(cache, args.output_dir,
+                                             language=args.language, title=args.title)
+            summary = {"execution": "passed", "epub": str(result.epub_path),
+                       "report": str(result.provenance_path), "translated": False}
+            print(json.dumps(summary) if args.json else
+                  f"Wrote {result.epub_path}\nReport: {result.provenance_path}")
+            return 0
+        cache = load_cache(args.cache, source_pdf=args.source_pdf)
         if args.format == "both":
             return _build_both(cache, args)
         if args.format == "epub":
-            result: Union[EpubPreviewResult, PdfPreviewResult] = build_epub_preview(
+            result = build_epub_preview(
                 cache, args.output_dir, language=args.language, title=args.title)
         else:
             result = build_pdf_preview(cache, args.output_dir)
-    except (MineruCacheError, MineruExportError) as exc:
+    except (MineruCacheError, MineruExportError, OSError) as exc:
         print(f"Reconstruction failed: {exc}", file=sys.stderr)
         return 1
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Set, Tuple
 
@@ -33,7 +33,7 @@ RUNNING_HEADER_MAX_CHARS = 200
 _ROMAN_NUMERAL = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
 _TERMINAL_PUNCTUATION = (".", "!", "?")
 _NOTICE_KIND = "notice"
-_HEADING_STYLES = {1: "heading1", 2: "heading2"}
+_HEADING_STYLES = {level: f"heading{level}" for level in range(1, 7)}
 
 # Visible, untranslated identification for each source-preserved block. The
 # label is rendered by the PDF builder, never passed through the translator.
@@ -105,6 +105,7 @@ class Exclusion:
     source_page: int
     bbox: Tuple[float, float, float, float]
     reason: str
+    block_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +140,7 @@ class SourceContent:
     page_map: Tuple[PageInfo, ...]
     counts: Mapping[str, int]
     review_required: bool
+    list_styles: Mapping[int, str] = field(default_factory=dict)
 
     def to_plain_content(self) -> PdfPlainContent:
         """Convert to the shared PDF content model without preview decoration.
@@ -213,6 +215,7 @@ def adapt(cache: MineruCache) -> SourceContent:
     findings: List[Finding] = []
     images: Dict[int, List[ImageAsset]] = {}
     accounted: Set[int] = set()
+    list_styles: Dict[int, str] = {}
 
     def emit(text: str, kind: str, style: str, fmt: ParagraphFormat,
              block: Optional[CachedBlock] = None, source_type: str = "") -> None:
@@ -238,7 +241,7 @@ def adapt(cache: MineruCache) -> SourceContent:
         exclusions.append(Exclusion(
             kind=kind, source_type=block.type, text=block.text.strip(),
             sample_page=block.page_index, source_page=page.source_page,
-            bbox=block.bbox, reason=reason))
+            bbox=block.bbox, reason=reason, block_index=block.index))
         accounted.add(block.index)
 
     def running_matter(block: CachedBlock, text: str, *, kind: str, label: str,
@@ -268,25 +271,29 @@ def adapt(cache: MineruCache) -> SourceContent:
         page = cache.pages[block.page_index]
         text = block.text.strip()
 
-        if block.preservation_reason == "inline_formula_paragraph":
-            asset = _preserved_asset(block, page, "formula")
+        if block.preservation_reason in {"inline_formula_paragraph", "xml_control_character"}:
+            xml_fallback = block.preservation_reason == "xml_control_character"
+            preserved_kind = "text" if xml_fallback else "formula"
+            asset = _preserved_asset(block, page, preserved_kind)
             anchor = len(paragraphs) - 1
             images.setdefault(anchor, []).append(asset)
             accounted.add(block.index)
             provenance.append(_preserved_provenance(
-                block, page, kind="formula", asset=asset, anchor=anchor,
-                text=_sha256_text(block.text), root=cache.root))
+                block, page, kind=preserved_kind, asset=asset, anchor=anchor,
+                text=_sha256_text(block.text), image_reference=cache.asset_reference(asset.path)))
             findings.append(Finding(
-                code="inline_formula_paragraph_preserved",
-                message="The entire paragraph containing an inline formula was cropped "
-                        "from the original PDF and retained untranslated.",
+                code="invalid_xml_text_preserved" if xml_fallback else "inline_formula_paragraph_preserved",
+                message=("Recognition contains XML-invalid characters; the whole source region "
+                         "was preserved as an image without rewriting text." if xml_fallback else
+                        "The entire paragraph containing an inline formula was cropped "
+                        "from the original PDF and retained untranslated."),
                 sample_page=block.page_index, block_index=block.index, severity="review"))
 
         elif block.type == "title":
             if not text:
                 exclude(block, "empty_title", "empty recognition record")
                 continue
-            level = min(block.level or 1, 3)
+            level = min(block.level or 1, 6)
             emit(text, "heading", _HEADING_STYLES.get(level, "heading3"),
                  ParagraphFormat(), block)
 
@@ -304,6 +311,8 @@ def adapt(cache: MineruCache) -> SourceContent:
             texts = block.list_items if block.type == "list" else (text,)
             for item in texts:
                 if item.strip():
+                    if block.list_kind:
+                        list_styles[len(paragraphs)] = block.list_kind
                     emit(item.strip(), "paragraph", "normal", ParagraphFormat(), block)
 
         elif block.type in {"image", "chart"}:
@@ -315,7 +324,7 @@ def adapt(cache: MineruCache) -> SourceContent:
                 kind="image", source_type=block.type, sample_page=block.page_index,
                 source_page=page.source_page, bbox=block.bbox,
                 text_sha256=_sha256_text(""), anchor_index=anchor,
-                image_path=block.image_path.relative_to(cache.root).as_posix(),
+                image_path=cache.asset_reference(asset.path),
                 image_sha256=asset.sha256, block_index=block.index))
             caption = " ".join(part.strip() for part in block.image_caption if part.strip())
             if caption:
@@ -341,7 +350,7 @@ def adapt(cache: MineruCache) -> SourceContent:
             accounted.add(block.index)
             provenance.append(_preserved_provenance(
                 block, page, kind="table", asset=asset, anchor=anchor,
-                text=_sha256_text(""), root=cache.root))
+                text=_sha256_text(""), image_reference=cache.asset_reference(asset.path)))
             if block.preservation_reason == "table_missing_image":
                 findings.append(Finding(
                     code="table_source_crop",
@@ -366,7 +375,7 @@ def adapt(cache: MineruCache) -> SourceContent:
             accounted.add(block.index)
             provenance.append(_preserved_provenance(
                 block, page, kind="formula", asset=asset, anchor=anchor,
-                text=_sha256_text(block.math_content), root=cache.root))
+                text=_sha256_text(block.math_content), image_reference=cache.asset_reference(asset.path)))
 
         elif block.type == "page_footnote":
             if not text:
@@ -391,7 +400,7 @@ def adapt(cache: MineruCache) -> SourceContent:
 
         elif block.type == "page_number":
             running_matter(block, text, kind="running_page_number", label="page number",
-                           code="page_number_outside_top_margin")
+                           code="page_number_outside_top_margin", bottom=_in_bottom_band(block, page))
 
     unaccounted = [block for block in cache.blocks if block.index not in accounted]
     for block in unaccounted:
@@ -416,6 +425,7 @@ def adapt(cache: MineruCache) -> SourceContent:
         "source_preserved": sum(1 for asset in all_assets if asset.kind != "image"),
         "tables": sum(1 for asset in all_assets if asset.kind == "table"),
         "formulas": sum(1 for asset in all_assets if asset.kind == "formula"),
+        "source_preserved_text": sum(1 for asset in all_assets if asset.kind == "text"),
         "excluded": len(exclusions),
         "empty_records": sum(1 for item in exclusions if item.kind == "empty_record"),
         "findings": len(findings),
@@ -435,6 +445,7 @@ def adapt(cache: MineruCache) -> SourceContent:
         page_map=cache.pages,
         counts=counts,
         review_required=any(item.severity == "review" for item in findings),
+        list_styles=list_styles,
     )
 
 
@@ -448,7 +459,8 @@ def apply_preview_decoration(cache: MineruCache,
     """
     notice = _notice_text(cache)
     paragraphs = (notice,) + source.paragraphs
-    styles = ("normal",) + source.styles
+    styles = ("normal",) + tuple("heading3" if style in {"heading4", "heading5", "heading6"}
+                                else style for style in source.styles)
     formats = (ParagraphFormat(italic=True),) + source.formats
     images = {anchor + 1: assets
               for anchor, assets in source.images_by_paragraph.items()}
@@ -564,13 +576,14 @@ def _preserved_asset(block: CachedBlock, page: PageInfo, kind: str) -> ImageAsse
         kind=kind,
         block_index=block.index,
         label_override=("Source-preserved paragraph with inline formula (untranslated)"
-                        if block.preservation_reason == "inline_formula_paragraph" else ""),
+                        if block.preservation_reason == "inline_formula_paragraph" else
+                        "Source-preserved text (untranslated)" if kind == "text" else ""),
     )
 
 
 def _preserved_provenance(block: CachedBlock, page: PageInfo, *, kind: str,
                           asset: ImageAsset, anchor: int, text: str,
-                          root: Path) -> Provenance:
+                          image_reference: str) -> Provenance:
     assert block.image_path is not None
     return Provenance(
         kind=kind,
@@ -580,7 +593,7 @@ def _preserved_provenance(block: CachedBlock, page: PageInfo, *, kind: str,
         bbox=block.bbox,
         text_sha256=text,
         anchor_index=anchor,
-        image_path=block.image_path.relative_to(root).as_posix(),
+        image_path=image_reference,
         image_sha256=asset.sha256,
         block_index=block.index,
     )

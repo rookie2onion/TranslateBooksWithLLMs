@@ -13,6 +13,9 @@ The user's explicit permission to send a particular task's source document to th
 **Reconstruction**:
 A readable rendition assembled from recognized document content and visual assets. Reconstruction does not, by itself, mean translation or an exact replica of the source pages.
 
+**Original-language EPUB**:
+A reconstruction in EPUB form that retains the recognized source language without translation. It may combine reflowed text with source-preserved images of complex content.
+
 **Local recognition pause**:
 A halt in this application's recognition work while the provider's task may continue. Continuing the task means retrieving its existing result, not implicitly requesting recognition again.
 

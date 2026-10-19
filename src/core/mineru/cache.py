@@ -72,6 +72,14 @@ class PageInfo:
 
 
 @dataclass(frozen=True)
+class SourceRegion:
+    """One physical source region contributing to a preserved logical block."""
+
+    page_index: int
+    bbox: Tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
 class CachedBlock:
     """One recognised block, in sample reading order and source-page points."""
 
@@ -81,6 +89,7 @@ class CachedBlock:
     bbox: Tuple[float, float, float, float]
     text: str = ""
     list_items: Tuple[str, ...] = ()
+    list_kind: str = ""
     level: int | None = None
     image_path: Path | None = None
     image_caption: Tuple[str, ...] = ()
@@ -95,6 +104,7 @@ class CachedBlock:
     math_content: str = ""
     math_type: str = ""
     preservation_reason: str = ""
+    source_regions: Tuple[SourceRegion, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,6 +122,15 @@ class MineruCache:
     backend: str
     engine_version: str
     fingerprints: Mapping[str, str] = field(default_factory=dict)
+    generated_root: Path | None = None
+
+    def asset_reference(self, path: Path) -> str:
+        """Name an admitted input asset or an output-owned generated crop."""
+        if path.is_relative_to(self.root):
+            return path.relative_to(self.root).as_posix()
+        if self.generated_root is not None and path.is_relative_to(self.generated_root):
+            return "generated/" + path.relative_to(self.generated_root).as_posix()
+        raise MineruCacheError("An image is outside the admitted asset roots.")
 
 
 def load_cache(root: Path, *, source_pdf: Path | None = None) -> MineruCache:
