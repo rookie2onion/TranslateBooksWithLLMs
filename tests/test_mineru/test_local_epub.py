@@ -62,8 +62,6 @@ def test_local_command_exports_original_text_images_and_report(tmp_path):
     assert "Before heading" in text
     assert "preview" not in text.lower()
     assert len(docs[0].findall(f".//{XHTML}img")) == 1
-    image = docs[0].find(f".//{XHTML}img")
-    assert (image.get("width"), image.get("height")) == ("40", "20")
     report = json.loads((out / "book.report.json").read_text(encoding="utf-8"))
     assert report["counts"]["blocks_seen"] == 4
     assert report["counts"]["blocks_unaccounted"] == 0
@@ -250,3 +248,52 @@ def test_source_preserved_figure_includes_caption_outside_image_bbox(tmp_path):
     assert export(root, out) == 0
     report = json.loads((out / "book.report.json").read_text())
     assert [x["bbox"] for x in report["source_preserved"][0]["regions"]] == [body["bbox"], caption["bbox"]]
+
+
+@pytest.mark.parametrize("size", [(1200, 1600), (600, 2400)])
+def test_reader_keeps_large_images_proportional_without_horizontal_clipping(tmp_path, size):
+    import pymupdf
+
+    root = bundle(tmp_path, [{"type": "image", "bbox": [10, 20, 190, 250], "blocks": [
+        {"type": "image_body", "bbox": [10, 20, 190, 250], "lines": [
+            {"spans": [{"type": "image", "image_path": "figure.jpg"}]}]}]}])
+    Image.new("RGB", size, "blue").save(root / "images" / "figure.jpg")
+    out = tmp_path / "output"
+    assert export(root, out) == 0
+    with pymupdf.open(out / "book.epub") as book:
+        book.layout(width=420, height=640, fontsize=18)
+        images = [(page, block) for page in book for block in page.get_text("dict")["blocks"]
+                  if block["type"] == 1]
+        assert images
+        visible = []
+        for page, block in images:
+            # A tall image may continue on the next reader page. Check the
+            # uncropped transform, not the clipped fragment's aspect ratio.
+            whole = pymupdf.Rect(0, 0, 1, 1) * pymupdf.Matrix(block["transform"])
+            assert whole.x0 >= 0 and whole.x1 <= page.rect.width
+            assert abs(whole.width / whole.height - size[0]/size[1]) < 0.01
+            box = pymupdf.Rect(block["bbox"])
+            visible.append(((box.y0-whole.y0)/whole.height, (box.y1-whole.y0)/whole.height))
+        assert min(start for start, end in visible) < 0.001
+        assert max(end for start, end in visible) > 0.999
+
+
+@pytest.mark.parametrize("kind", ["image", "chart"])
+def test_missing_visual_crop_is_reported(tmp_path, kind):
+    import pymupdf
+
+    root = bundle(tmp_path, [{"type": kind, "bbox": [10, 20, 190, 150], "blocks": [
+        {"type": f"{kind}_body", "bbox": [10, 20, 190, 150], "lines": [
+            {"spans": [{"type": kind, "image_path": "missing.jpg"}]}]}]}])
+    with pymupdf.open() as pdf:
+        pdf.new_page(width=200, height=300)
+        pdf.save(root / "fixture_origin.pdf")
+    out = tmp_path / "output"
+    assert export(root, out) == 0
+    report = json.loads((out / "book.report.json").read_text())
+    fallback = report["image_fallbacks"][0]
+    assert fallback["type"] == kind
+    assert fallback["reason"] == "image_missing_asset"
+    assert fallback["method"] == "pdf_crop"
+    with zipfile.ZipFile(out / "book.epub") as z:
+        assert "OEBPS/" + fallback["resource"] in z.namelist()

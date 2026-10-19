@@ -8,7 +8,6 @@ is offline and deterministic, and the cache is never modified.
 
 from __future__ import annotations
 
-import io
 import re
 import uuid
 import zipfile
@@ -175,19 +174,20 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
     }
     if isinstance(reconstruction, SourceContent):
         excluded = {x.block_index: x.reason for x in reconstruction.exclusions}
-        preserved = {a.block_index: a for group in reconstruction.images_by_paragraph.values()
-                     for a in group if a.kind != "image"}
-        source_preserved = [
+        visuals = {a.block_index: a for group in reconstruction.images_by_paragraph.values()
+                   for a in group}
+        preserved = {index: asset for index, asset in visuals.items() if asset.kind != "image"}
+        image_records = [
             {"page": cache.pages[b.page_index].source_page, "block": b.index,
              "type": b.type, "reason": b.preservation_reason or "provider_source_image",
-             "resource": _image_name(preserved[b.index]),
+             "resource": _image_name(visuals[b.index]),
              "regions": [{"page": cache.pages[r.page_index].source_page, "bbox": list(r.bbox)}
                          for r in b.source_regions] or [
                              {"page": cache.pages[b.page_index].source_page, "bbox": list(b.bbox)}],
              "method": "pdf_crop" if (cache.generated_root is not None and
                  b.image_path is not None and
                  b.image_path.is_relative_to(cache.generated_root)) else "provider_image"}
-            for b in cache.blocks if b.index in preserved]
+            for b in cache.blocks if b.index in visuals]
         report: Dict[str, Any] = {
             "artifact": {"format": "epub", "translated": False},
             "coverage": {"scope": "supplied_result", "pages": len(cache.pages),
@@ -202,7 +202,8 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
                         else "source_image" if b.index in preserved else "emitted",
                         **({"reason": excluded[b.index]} if b.index in excluded else {})}
                        for b in cache.blocks],
-            "source_preserved": source_preserved,
+            "source_preserved": [r for r in image_records if r["block"] in preserved],
+            "image_fallbacks": [r for r in image_records if r["method"] == "pdf_crop"],
             "exclusions": [{"page": x.source_page, "type": x.source_type,
                             "reason": x.reason} for x in reconstruction.exclusions],
             "findings": [{"code": x.code, "page": cache.pages[x.sample_page].source_page
@@ -300,16 +301,10 @@ def _section_document(reconstruction: Reconstruction | SourceContent, section: _
     def figure(asset: ImageAsset) -> str:
         if not isinstance(reconstruction, SourceContent):
             return _figure(asset)
-        from PIL import Image
-
-        # Intrinsic dimensions reserve a proportional placeholder before decoding.
-        with Image.open(io.BytesIO(asset.data)) as image:
-            width, height = image.size
         indices = captions.get(asset.block_index, [])
         content = "".join(f'<p>{_inline(reconstruction.paragraphs[i])}</p>' for i in indices)
         caption = f"<figcaption>{content}</figcaption>" if content else ""
-        return (f'<figure class="image"><img src="{_attr(_image_name(asset))}" alt="" '
-                f'width="{width}" height="{height}"/>'
+        return (f'<figure class="image"><img src="{_attr(_image_name(asset))}" alt=""/>'
                 f"{caption}</figure>")
 
     if number == 1:

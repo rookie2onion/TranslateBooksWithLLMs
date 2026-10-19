@@ -108,3 +108,7 @@ The user supplied the local Stadtplanung result bundle on 2026-10-19. It contain
 - Title levels 1 and 2 and geometric boxes are present. The inspected layout supplies no explicit font family, size, color, bold, or italic metadata. EPUB typography therefore uses consistent defaults rather than claiming to recover the source fonts.
 
 The initial inspection did not constitute conversion or reader acceptance. Both bundles have since been exported and checked; final results and recognition limitations are documented in the [acceptance record](mineru-local-epub-acceptance.md).
+
+## Delivery status
+
+Tickets #27, #28, #29, and #30 are implemented and independently reviewed. Both supplied books pass the local export, package, content-accounting, and agent reader checks recorded in the [acceptance record](mineru-local-epub-acceptance.md). User reading approval remains pending; parent specification #26 remains open. Changes are committed locally without a push.

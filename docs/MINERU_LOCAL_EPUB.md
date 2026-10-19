@@ -17,6 +17,10 @@ Run from the repository root using the configured project Python environment. Th
 
 No online cache manifest is required. The paragraph layer is authoritative when present; the parallel preprocessing layer is a fallback, never additional content. Companion V2 files are not needed for the observed reference-list schema: each layout reference block is one item, and its wrapped lines are not separate items.
 
+Current list compatibility is the observed `ref_text` / `reference_list` contract: explicit numbering remains in the text, and reference items have no invented bullets or hierarchy. The supplied results contain no ordered/unordered or nested-list metadata. Other list shapes are refused explicitly until a real supported input contract is available.
+
+Raw local-result admission and online-cache admission deliberately keep their schema decoding and source-identity policies separate. Local missing assets can use a verified bundled original; the online path retains its stricter provider-placeholder and authorization contract. They share normalized block types, crop validation, source adaptation, and EPUB packaging rather than weakening either admission policy to make the decoders identical.
+
 ## What the book preserves
 
 The original-language EPUB uses reflowed layout: recognized wording and reading order, heading hierarchy and navigation, reference item boundaries, figures/charts with captions and notes, and substantive page notes. Explicit inline superscript, subscript, bold, and italic tags are retained; ordinary text is escaped. Source fonts absent from recognition data are not reconstructed.
@@ -47,6 +51,6 @@ Specification: [#26](https://github.com/rookie2onion/TranslateBooksWithLLMs/issu
 
 ## Related implementation reviewed
 
-[Books_Converter](https://github.com/Feplus2/Books_Converter/tree/f6b7fc5817413835f9cdbe2d7448e6d481504a17) was inspected before completing this feature. Its Stage 3 intrinsic-image dimensions and association-first rendering are useful references. This implementation uses the existing shared source model and EPUB packager and independently writes image width/height attributes; it does not vendor that project or add its dependencies.
+[Books_Converter](https://github.com/Feplus2/Books_Converter/tree/f6b7fc5817413835f9cdbe2d7448e6d481504a17) was inspected before completing this feature. Its Stage 3 association-first rendering is a useful reference for grouping captions before rendering figures and retaining unassociated substantive notes. This implementation uses the existing shared source model and EPUB packager; it does not vendor that project or add its dependencies. Explicit intrinsic image-size attributes were tried but rejected after a MuPDF reader regression demonstrated clipped large images. Responsive proportional sizing is retained and covered by a reader-level regression through the exported artifact.
 
 Its complete pipeline expects normalized content lists plus reconstructed structure, uses model-assisted structure analysis, and includes automatic dehyphenation. The basic renderer also skips charts and page footnotes, while its richer footnote path depends on additional structure annotations. Direct substitution would therefore require another adapter and changes to the accepted offline, wording-preserving behavior. MathML reconstruction and heuristic footnote linking remain outside this milestone.
