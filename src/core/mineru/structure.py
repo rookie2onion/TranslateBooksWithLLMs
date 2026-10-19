@@ -64,11 +64,12 @@ class ImageAsset:
     sha256: str
     kind: str = "image"
     block_index: int = -1
+    label_override: str = ""
 
     @property
     def label(self) -> str:
         """Visible untranslated marker, empty for an ordinary figure."""
-        return PRESERVED_LABELS.get(self.kind, "")
+        return self.label_override or PRESERVED_LABELS.get(self.kind, "")
 
     def to_pdf_image(self) -> PdfImage:
         return PdfImage(data=self.data, ext=self.ext,
@@ -267,7 +268,21 @@ def adapt(cache: MineruCache) -> SourceContent:
         page = cache.pages[block.page_index]
         text = block.text.strip()
 
-        if block.type == "title":
+        if block.preservation_reason == "inline_formula_paragraph":
+            asset = _preserved_asset(block, page, "formula")
+            anchor = len(paragraphs) - 1
+            images.setdefault(anchor, []).append(asset)
+            accounted.add(block.index)
+            provenance.append(_preserved_provenance(
+                block, page, kind="formula", asset=asset, anchor=anchor,
+                text=_sha256_text(block.text), root=cache.root))
+            findings.append(Finding(
+                code="inline_formula_paragraph_preserved",
+                message="The entire paragraph containing an inline formula was cropped "
+                        "from the original PDF and retained untranslated.",
+                sample_page=block.page_index, block_index=block.index, severity="review"))
+
+        elif block.type == "title":
             if not text:
                 exclude(block, "empty_title", "empty recognition record")
                 continue
@@ -275,7 +290,7 @@ def adapt(cache: MineruCache) -> SourceContent:
             emit(text, "heading", _HEADING_STYLES.get(level, "heading3"),
                  ParagraphFormat(), block)
 
-        elif block.type == "paragraph":
+        elif block.type in {"paragraph", "list", "page_aside_text"}:
             if not text:
                 exclude(block, "empty_record",
                         "empty recognition record (no text)")
@@ -286,15 +301,18 @@ def adapt(cache: MineruCache) -> SourceContent:
                     message="Numeric top-margin paragraph retained as text; it may be a "
                             "running page number the recogniser classified as a paragraph.",
                     sample_page=block.page_index, block_index=block.index))
-            emit(text, "paragraph", "normal", ParagraphFormat(), block)
+            texts = block.list_items if block.type == "list" else (text,)
+            for item in texts:
+                if item.strip():
+                    emit(item.strip(), "paragraph", "normal", ParagraphFormat(), block)
 
-        elif block.type == "image":
+        elif block.type in {"image", "chart"}:
             asset = _image_asset(block, page, cache.root)
             anchor = len(paragraphs) - 1
             images.setdefault(anchor, []).append(asset)
             accounted.add(block.index)
             provenance.append(Provenance(
-                kind="image", source_type="image", sample_page=block.page_index,
+                kind="image", source_type=block.type, sample_page=block.page_index,
                 source_page=page.source_page, bbox=block.bbox,
                 text_sha256=_sha256_text(""), anchor_index=anchor,
                 image_path=block.image_path.relative_to(cache.root).as_posix(),
@@ -302,14 +320,14 @@ def adapt(cache: MineruCache) -> SourceContent:
             caption = " ".join(part.strip() for part in block.image_caption if part.strip())
             if caption:
                 emit(caption, "caption", "normal", ParagraphFormat(italic=True),
-                     block, source_type="image_caption")
+                     block, source_type=f"{block.type}_caption")
             credit = " ".join(part.strip() for part in block.image_footnote if part.strip())
             if credit:
                 emit(credit, "footnote", "normal", ParagraphFormat(italic=True),
-                     block, source_type="image_footnote")
+                     block, source_type=f"{block.type}_footnote")
             if text:
                 emit(text, "paragraph", "normal", ParagraphFormat(), block,
-                     source_type="image_content")
+                     source_type=f"{block.type}_content")
                 findings.append(Finding(
                     code="image_content_retained",
                     message="Recognised image text was retained as a paragraph after "
@@ -324,6 +342,12 @@ def adapt(cache: MineruCache) -> SourceContent:
             provenance.append(_preserved_provenance(
                 block, page, kind="table", asset=asset, anchor=anchor,
                 text=_sha256_text(""), root=cache.root))
+            if block.preservation_reason == "table_missing_image":
+                findings.append(Finding(
+                    code="table_source_crop",
+                    message="The provider supplied no table image; the table region "
+                            "was cropped from the original PDF and retained untranslated.",
+                    sample_page=block.page_index, block_index=block.index, severity="review"))
             caption = " ".join(part.strip() for part in block.table_caption
                                if part.strip())
             if caption:
@@ -539,6 +563,8 @@ def _preserved_asset(block: CachedBlock, page: PageInfo, kind: str) -> ImageAsse
         sha256=hashlib.sha256(data).hexdigest(),
         kind=kind,
         block_index=block.index,
+        label_override=("Source-preserved paragraph with inline formula (untranslated)"
+                        if block.preservation_reason == "inline_formula_paragraph" else ""),
     )
 
 

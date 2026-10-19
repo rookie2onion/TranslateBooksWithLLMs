@@ -320,7 +320,7 @@ def test_a_missing_supplied_asset_fails_without_publishing_a_book(web):
     assert not (Path(web.output_dir) / "missing.pdf.accounting.json").exists()
 
 
-def test_an_inline_formula_fails_with_the_localized_unsupported_content_code(web):
+def test_an_inline_formula_paragraph_completes_as_labeled_untranslated_source(web):
     pages = [[paragraph_block(
         "Energy is conserved.",
         [60, 80, 540, 140],
@@ -328,7 +328,7 @@ def test_an_inline_formula_fails_with_the_localized_unsupported_content_code(web
             {"type": "text", "content": "Energy is conserved: "},
             {"type": "equation_inline", "content": "E = mc^2"},
         ],
-    )]]
+    ), paragraph_block("Ordinary body text.", [60, 300, 540, 400])]]
     source = build_source_pdf(web.tmp_path / "source.pdf", pages=1)
     web.http.zip_bytes = result_zip_bytes(page_count=1, pages=pages)
 
@@ -336,10 +336,16 @@ def test_an_inline_formula_fails_with_the_localized_unsupported_content_code(web
     response = _start(web, upload, output_filename="inline.pdf")
     status = _wait_for_terminal(web, response.get_json()["translation_id"])
 
-    assert status["status"] == "error"
-    # A stable code the Web UI resolves in all seven locales; the raw message
-    # names the limitation instead of claiming the formula was translated.
-    assert status["error_code"] == "mineru_unsupported_content"
-    assert "inline formula" in (status["error"] or "").lower()
-    assert _download(web, "inline.pdf").status_code == 404
+    assert status["status"] == "completed", status
+    assert status["accounting"]["source_preserved"] == 1
+    assert status["accounting"]["formulas"] == 1
+    downloaded = _download(web, "inline.pdf")
+    assert downloaded.status_code == 200
+    text = _pdf_text(downloaded.data)
+    assert "Source-preserved paragraph with inline formula (untranslated)" in text
+    assert "FR: Ordinary body text." in text
+    assert "E = mc^2" not in text
+    payload = json.loads((Path(web.output_dir) / "inline.pdf.accounting.json").read_text())
+    assert payload["source_content"]["source_preserved"] == 1
+    assert payload["claims"]["every_visible_word_translated"] is False
     assert len(web.http.submitted_files()) == 1

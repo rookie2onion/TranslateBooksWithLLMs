@@ -226,9 +226,9 @@ def test_a_preserved_asset_path_escaping_the_cache_fails_explicitly(tmp_path):
 
 def test_an_unknown_block_type_still_fails_closed(tmp_path):
     pages = default_pages()
-    pages[0]["blocks"].append({"type": "chart", "text": "", "bbox": [60, 60, 300, 300]})
+    pages[0]["blocks"].append({"type": "unknown_block", "text": "", "bbox": [60, 60, 300, 300]})
 
-    with pytest.raises(MineruCacheError, match="unsupported type 'chart'"):
+    with pytest.raises(MineruCacheError, match="unsupported type 'unknown_block'"):
         _load(tmp_path, pages)
 
 

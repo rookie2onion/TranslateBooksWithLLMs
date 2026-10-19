@@ -7,17 +7,19 @@ fingerprinted so later stages can prove the cache was not modified.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, Mapping, Tuple
 
+from src.utils.atomic_io import atomic_path
 from src.utils.hashing import sha256_file
 
 KNOWN_BLOCK_TYPES = frozenset(
-    {"title", "paragraph", "image", "table", "equation_interline",
-     "page_header", "page_footer", "page_footnote", "page_number"}
+    {"title", "paragraph", "list", "image", "chart", "table", "equation_interline",
+     "page_header", "page_footer", "page_footnote", "page_number", "page_aside_text"}
 )
 
 # MinerU 3.4.4 V2 contract values for a table block (the online service reported
@@ -26,9 +28,9 @@ KNOWN_BLOCK_TYPES = frozenset(
 # promised.
 KNOWN_TABLE_TYPES = frozenset({"simple_table", "complex_table"})
 
-# V2 text runs are either text or an inline formula. Inline formulas have no
-# verified preservation path in this application (there is no isolated image and
-# translating LaTeX as prose is not safe), so they fail closed intentionally.
+# Inline formulas are not translated as prose. Online loading can preserve the
+# whole paragraph using the fingerprint-matched source PDF; previews without
+# that original still refuse inline formula runs.
 TEXT_SPAN_TYPE = "text"
 INLINE_FORMULA_SPAN_TYPE = "equation_inline"
 
@@ -78,6 +80,7 @@ class CachedBlock:
     type: str
     bbox: Tuple[float, float, float, float]
     text: str = ""
+    list_items: Tuple[str, ...] = ()
     level: int | None = None
     image_path: Path | None = None
     image_caption: Tuple[str, ...] = ()
@@ -91,6 +94,7 @@ class CachedBlock:
     # text is retained for provenance only.
     math_content: str = ""
     math_type: str = ""
+    preservation_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,7 +114,7 @@ class MineruCache:
     fingerprints: Mapping[str, str] = field(default_factory=dict)
 
 
-def load_cache(root: Path) -> MineruCache:
+def load_cache(root: Path, *, source_pdf: Path | None = None) -> MineruCache:
     """Load and validate a cached MinerU result; raise MineruCacheError on any gap."""
     root = Path(root).resolve()
     if not root.is_dir():
@@ -135,6 +139,10 @@ def load_cache(root: Path) -> MineruCache:
         )
     source_sha256 = _sha256_hex(info.get("source_sha256"), "source_sha256")
     sample_sha256 = _sha256_hex(info.get("sample_sha256"), "sample_sha256")
+    if source_pdf is not None and sha256_file(source_pdf) != sample_sha256:
+        raise MineruCacheError(
+            "The recognition result belongs to a different source document: "
+            "source PDF fingerprint mismatch.")
     source_path = info.get("source_path")
     if not isinstance(source_path, str) or not source_path:
         raise MineruCacheError("sample-info.json has no source_path string.")
@@ -154,7 +162,9 @@ def load_cache(root: Path) -> MineruCache:
         )
 
     pages = tuple(_page_info(index, entry, source_pages) for index, entry in enumerate(pdf_info))
-    blocks, fingerprints = _blocks(root, assets, v2, pages)
+    blocks, fingerprints = _blocks(root, assets, v2, pages, source_pdf=source_pdf)
+    if source_pdf is not None and sha256_file(source_pdf) != sample_sha256:
+        raise MineruCacheError("The source PDF changed while preserving source content.")
     _fingerprint(root / "sample-info.json", root, fingerprints)
     _fingerprint(assets / "layout.json", root, fingerprints)
     _fingerprint(v2_paths[0], root, fingerprints)
@@ -192,7 +202,8 @@ def _page_info(index: int, entry: Any, source_pages: list[int]) -> PageInfo:
                     width_pt=float(size[0]), height_pt=float(size[1]))
 
 
-def _blocks(root: Path, assets: Path, v2: list, pages: Tuple[PageInfo, ...]
+def _blocks(root: Path, assets: Path, v2: list, pages: Tuple[PageInfo, ...],
+            *, source_pdf: Path | None = None
             ) -> Tuple[Tuple[CachedBlock, ...], Dict[str, str]]:
     blocks: list[CachedBlock] = []
     fingerprints: Dict[str, str] = {}
@@ -204,7 +215,7 @@ def _blocks(root: Path, assets: Path, v2: list, pages: Tuple[PageInfo, ...]
             if len(blocks) >= MAX_BLOCKS:
                 raise MineruCacheError(f"The cache exceeds {MAX_BLOCKS} recognised blocks.")
             block = _cached_block(root, assets, page_index, pages[page_index], entry,
-                                  len(blocks), fingerprints)
+                                  len(blocks), fingerprints, source_pdf=source_pdf)
             total_text += _text_length(block)
             if total_text > MAX_TOTAL_TEXT:
                 raise MineruCacheError("The cache exceeds the reconstruction text budget.")
@@ -220,7 +231,8 @@ def _text_length(block: CachedBlock) -> int:
 
 
 def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, entry: Any,
-                  index: int, fingerprints: Dict[str, str]) -> CachedBlock:
+                  index: int, fingerprints: Dict[str, str],
+                  *, source_pdf: Path | None = None) -> CachedBlock:
     where = f"V2 page {page_index} block {index}"
     if not isinstance(entry, dict):
         raise MineruCacheError(f"{where} is not an object.")
@@ -232,21 +244,57 @@ def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, ent
     if not isinstance(content, dict):
         raise MineruCacheError(f"{where} has no content object.")
 
-    if kind == "image":
+    runs = content.get("paragraph_content") if kind == "paragraph" else None
+    if (source_pdf is not None and isinstance(runs, list)
+            and any(isinstance(run, dict) and run.get("type") == INLINE_FORMULA_SPAN_TYPE
+                    for run in runs)):
+        parts = []
+        for run in runs:
+            if (not isinstance(run, dict) or run.get("type") not in
+                    {TEXT_SPAN_TYPE, INLINE_FORMULA_SPAN_TYPE}
+                    or not isinstance(run.get("content"), str)):
+                raise MineruCacheError(f"{where} has an invalid inline-formula paragraph.")
+            parts.append(run["content"])
+        text = _clip("".join(parts), where)
+        image_path = _source_crop(root, assets, source_pdf, page, bbox, index,
+                                  where, fingerprints)
+        return CachedBlock(index=index, page_index=page_index, type=kind, bbox=bbox,
+                           text=text, image_path=image_path,
+                           preservation_reason="inline_formula_paragraph")
+
+    if kind in {"image", "chart"}:
         source = content.get("image_source")
         if not isinstance(source, dict):
             raise MineruCacheError(f"{where} has no image_source object.")
         image_path = _image_path(root, assets, source.get("path"), where, fingerprints)
-        caption = _runs(content.get("image_caption"), f"{where} image_caption")
-        footnote = _runs(content.get("image_footnote"), f"{where} image_footnote")
+        caption = _runs(content.get(f"{kind}_caption"), f"{where} {kind}_caption")
+        footnote = _runs(content.get(f"{kind}_footnote"), f"{where} {kind}_footnote")
         return CachedBlock(index=index, page_index=page_index, type=kind, bbox=bbox,
                            text=_clip(content.get("content", "") or "", where),
                            image_path=image_path, image_caption=caption,
                            image_footnote=footnote)
 
+    if kind == "list":
+        # The whole-book V2 result supplies reference_list blocks with ordered
+        # text items. Other list/item structures remain unverified and refused.
+        if content.get("list_type") != "reference_list":
+            raise MineruCacheError(f"{where} has an unsupported list_type.")
+        items = content.get("list_items")
+        if not isinstance(items, list) or len(items) > MAX_BLOCK_TEXT:
+            raise MineruCacheError(f"{where} has invalid list_items.")
+        texts = []
+        for item in items:
+            if (not isinstance(item, dict) or item.get("item_type") != "text"
+                    or not isinstance(item.get("item_content"), list)):
+                raise MineruCacheError(f"{where} has an unsupported or invalid list item.")
+            texts.append("".join(_runs(item["item_content"], f"{where} list item")))
+        text = _clip("\n".join(texts), where)
+        return CachedBlock(index=index, page_index=page_index, type=kind, bbox=bbox,
+                           text=text, list_items=tuple(texts))
+
     if kind == "table":
         return _table_block(root, assets, page_index, index, bbox, content,
-                            where, fingerprints)
+                            where, fingerprints, source_pdf=source_pdf, page=page)
 
     if kind == "equation_interline":
         return _equation_block(root, assets, page_index, index, bbox, content,
@@ -256,6 +304,7 @@ def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, ent
            "page_footnote": "page_footnote_content",
            "page_header": "page_header_content",
            "page_footer": "page_footer_content",
+           "page_aside_text": "page_aside_text_content",
            "page_number": "page_number_content"}[kind]
     text = "".join(_runs(content.get(key), f"{where} {key}"))
     level = content.get("level") if kind == "title" else None
@@ -267,14 +316,21 @@ def _cached_block(root: Path, assets: Path, page_index: int, page: PageInfo, ent
 
 def _table_block(root: Path, assets: Path, page_index: int, index: int,
                  bbox: Tuple[float, float, float, float], content: Mapping[str, Any],
-                 where: str, fingerprints: Dict[str, str]) -> CachedBlock:
+                 where: str, fingerprints: Dict[str, str], *,
+                 source_pdf: Path | None = None, page: PageInfo | None = None) -> CachedBlock:
     """Validate one contracted ``table`` block and keep its supplied source image."""
     where = f"{where} table"
     _require_non_empty_bounds(bbox, where)
     source = content.get("image_source")
     if not isinstance(source, dict):
         raise MineruCacheError(f"{where} has no image_source object.")
-    image_path = _image_path(root, assets, source.get("path"), where, fingerprints)
+    reason = ""
+    if source_pdf is not None and page is not None and source.get("path") == "images/":
+        image_path = _source_crop(root, assets, source_pdf, page, bbox, index,
+                                  where, fingerprints)
+        reason = "table_missing_image"
+    else:
+        image_path = _image_path(root, assets, source.get("path"), where, fingerprints)
     caption = _runs(content.get("table_caption"), f"{where} table_caption")
     footnote = _runs(content.get("table_footnote"), f"{where} table_footnote")
     # The HTML body is part of the verified contract but is never rendered:
@@ -291,7 +347,53 @@ def _table_block(root: Path, assets: Path, page_index: int, index: int,
     return CachedBlock(index=index, page_index=page_index, type="table", bbox=bbox,
                        image_path=image_path, table_caption=caption,
                        table_footnote=footnote, table_type=table_type,
-                       table_nest_level=nest_level)
+                       table_nest_level=nest_level, preservation_reason=reason)
+
+
+def _source_crop(root: Path, assets: Path, source_pdf: Path, page: PageInfo,
+                 bbox: Tuple[float, float, float, float], index: int,
+                 where: str, fingerprints: Dict[str, str]) -> Path:
+    """Rasterize a bounded source region without altering provider JSON."""
+    import pymupdf
+    from PIL import Image
+
+    _require_non_empty_bounds(bbox, where)
+    relative = f"_source_crops/page-{page.sample_index}-block-{index}.png"
+    target = assets / relative
+    if not target.resolve().is_relative_to(root.resolve()):
+        raise MineruCacheError(f"{where} source crop escapes the cache directory.")
+    with pymupdf.open(source_pdf) as document:
+        if page.sample_index >= len(document):
+            raise MineruCacheError(f"{where} has no corresponding source PDF page.")
+        original = document[page.sample_index]
+        # Render in displayed-page coordinates so rotation and crop boxes are
+        # applied by PyMuPDF before the normalized provider box is mapped.
+        if (abs(original.rect.width / original.rect.height - page.width_pt / page.height_pt)
+                > 0.01 * page.width_pt / page.height_pt):
+            raise MineruCacheError(f"{where} source page geometry does not match.")
+        if math.ceil(original.rect.width * 2) * math.ceil(original.rect.height * 2) > MAX_IMAGE_PIXELS:
+            raise MineruCacheError(f"{where} source rendering exceeds the pixel budget.")
+        pixmap = original.get_pixmap(matrix=pymupdf.Matrix(2, 2),
+                                    colorspace=pymupdf.csRGB, alpha=False, annots=False)
+        box = (math.floor(bbox[0] / page.width_pt * pixmap.width),
+               math.floor(bbox[1] / page.height_pt * pixmap.height),
+               math.ceil(bbox[2] / page.width_pt * pixmap.width),
+               math.ceil(bbox[3] / page.height_pt * pixmap.height))
+        with Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples) as image:
+            with image.crop(box) as crop:
+                stream = io.BytesIO()
+                crop.save(stream, format="PNG")
+                data = stream.getvalue()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise MineruCacheError(f"{where} source crop exceeds the image byte budget.")
+    if target.exists():
+        if not target.is_file() or target.read_bytes() != data:
+            raise MineruCacheError(f"{where} stored source crop does not match the original.")
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with atomic_path(target) as temporary:
+            temporary.write_bytes(data)
+    return _image_path(root, assets, relative, where, fingerprints)
 
 
 def _equation_block(root: Path, assets: Path, page_index: int, index: int,

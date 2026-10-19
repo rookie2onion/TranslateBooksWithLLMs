@@ -374,6 +374,33 @@ no resubmission) and completed:
 
 ## Redaction and data handling
 
+## Follow-up: authorized 198-page attempt (2026-10-19)
+
+The operator subsequently started the full 198-page document through the Web
+UI. Recognition downloaded successfully, but strict validation stopped on a V2
+`list` block. Inspection of the saved result identified 212 reference lists,
+10 charts, and one substantive aside; these now retain their content through
+the existing text/image adaptation paths. Unknown shapes still fail closed.
+
+The same result also contained five paragraphs with inline formula spans and
+one table whose image path was only `images/`. The operator approved retaining
+the entire formula-containing paragraphs as explicitly untranslated source
+images. Online validation now crops these paragraphs and the missing-image
+table region from the fingerprint-matched original PDF. Provider JSON remains
+unchanged; crop identities and review findings are recorded. Missing named
+images and unsafe paths are still rejected.
+
+Offline validation/adaptation of the saved result accounts for **198/198 pages
+and 3,149/3,149 blocks**, with zero unaccounted blocks. It yields 2,292 text
+paragraphs, 346 ordinary figure/chart instances, 21 preserved tables and five
+preserved formula-containing paragraphs. Six locally generated crops were
+needed; representative formula/table crops were visually checked. These
+figures prove accounting of this recognition result, not semantic accuracy or
+completed translation. Full-book translation and operator review remain a
+separate live outcome; the original twenty-page acceptance is historical.
+
+## Redaction and data handling (continued)
+
 No credential, token, signed URL, provider payload, or private document content
 is included in this report. The synthetic PDFs, synthetic MinerU V2 archives,
 temporary SQLite stores, and temporary output directories used by the tests were

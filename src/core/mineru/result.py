@@ -111,7 +111,7 @@ def load_validated_result(root: Path, *, admitted: AdmittedSource,
             "The validated recognition result is no longer present in this "
             "task's working data.")
     try:
-        cache = load_cache(root)
+        cache = load_cache(root, source_pdf=admitted.path)
     except MineruCacheError as exc:
         raise _result_error(exc, root) from exc
     _verify_identity(cache, admitted)
@@ -218,7 +218,7 @@ def _write_source_manifest(root: Path, admitted: AdmittedSource) -> None:
 
 def _load_cache(root: Path, admitted: AdmittedSource) -> MineruCache:
     try:
-        cache = load_cache(root)
+        cache = load_cache(root, source_pdf=admitted.path)
     except MineruCacheError as exc:
         raise _result_error(exc, root) from exc
     _verify_identity(cache, admitted)

@@ -41,9 +41,25 @@ written in that case.
   column-major.
 - Headings (levels 1-3), paragraphs, figures, caption runs and footnotes.
 - Figure captions and credits found in `image_caption` / `image_footnote`.
+- V2 charts use the same validated image path as figures; chart captions,
+  footnotes, and separately recognized text are retained with chart provenance.
+  Text drawn inside the supplied image is not promised to be translated.
+- Observed `reference_list` blocks retain each text item as a separate paragraph
+  in recognition order. Unverified list kinds, item kinds, and text-run shapes
+  fail closed. Substantive `page_aside_text` is retained as paragraph text.
 - Page footnotes, including figure captions the recogniser classified as
   footnotes.
 - Every image instance, validated and embedded with its source-page box.
+- Online translation can use the fingerprint-matched original PDF to preserve
+  an entire paragraph containing inline formulas as a labeled untranslated
+  source image. Its prose is not sent to the LLM. The report counts it as
+  source-preserved formula content and records the paragraph-level limitation.
+  Offline previews without the original still reject such spans.
+- A table whose provider image path is the empty-directory placeholder
+  `images/` can likewise be cropped from the original, with an explicit review
+  finding. Missing named images, unsafe paths, malformed content, and source
+  identity mismatches still fail closed. Crops are bounded, fingerprinted, and
+  checked on reuse; provider JSON is not rewritten.
 - Block provenance: sample index, source PDF page, bounding box and text hash.
 
 ## Exclusions, always recorded

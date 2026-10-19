@@ -16,7 +16,7 @@ import zipfile
 import pytest
 
 from src.core.mineru.admission import admit_pdf_source
-from src.core.mineru.errors import MineruResultInvalid, MineruUnsupportedContent
+from src.core.mineru.errors import MineruResultInvalid
 from src.core.mineru.result import build_online_result
 from src.core.mineru.structure import adapt
 from tests.test_mineru.online_fixtures import (
@@ -181,8 +181,8 @@ def test_an_image_path_escaping_the_result_is_rejected(tmp_path):
 def test_an_unsupported_block_type_fails_explicitly(tmp_path):
     admitted = _admitted(tmp_path, pages=1)
     pages = [[{
-        "type": "chart",
-        "text": "unsupported chart block",
+        "type": "unknown_block",
+        "text": "unsupported block",
         "bbox": [10, 10, 200, 200],
     }]]
     archive = _write_zip(tmp_path, result_zip_bytes(page_count=1, pages=pages))
@@ -190,10 +190,10 @@ def test_an_unsupported_block_type_fails_explicitly(tmp_path):
     with pytest.raises(MineruResultInvalid) as raised:
         build_online_result(archive, work_dir=tmp_path / "work", admitted=admitted)
 
-    assert "chart" in str(raised.value)
+    assert "unknown_block" in str(raised.value)
 
 
-def test_an_inline_formula_fails_with_the_unsupported_content_code(tmp_path):
+def test_an_inline_formula_paragraph_is_preserved_from_the_admitted_pdf(tmp_path):
     admitted = _admitted(tmp_path, pages=1)
     pages = [[paragraph_block(
         "Energy is conserved.",
@@ -205,9 +205,10 @@ def test_an_inline_formula_fails_with_the_unsupported_content_code(tmp_path):
     )]]
     archive = _write_zip(tmp_path, result_zip_bytes(page_count=1, pages=pages))
 
-    with pytest.raises(MineruUnsupportedContent) as raised:
-        build_online_result(archive, work_dir=tmp_path / "work", admitted=admitted)
-
-    assert raised.value.code == "mineru_unsupported_content"
-    assert "inline formula" in str(raised.value)
-    assert "unsupported content" in str(raised.value)
+    result = build_online_result(archive, work_dir=tmp_path / "work", admitted=admitted)
+    source = adapt(result.cache)
+    assert not source.paragraphs
+    assert source.counts["source_preserved"] == source.counts["formulas"] == 1
+    assert source.counts["blocks_accounted"] == 1
+    assert "paragraph with inline formula (untranslated)" in source.images_by_paragraph[-1][0].label
+    assert source.findings[0].code == "inline_formula_paragraph_preserved"
