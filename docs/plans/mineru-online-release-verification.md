@@ -394,8 +394,31 @@ paragraphs, 346 ordinary figure/chart instances, 21 preserved tables and five
 preserved formula-containing paragraphs. Six locally generated crops were
 needed; representative formula/table crops were visually checked. These
 figures prove accounting of this recognition result, not semantic accuracy or
-completed translation. Full-book translation and operator review remain a
-separate live outcome; the original twenty-page acceptance is historical.
+completed translation. The original twenty-page acceptance is historical.
+
+### Full-book translation outcome
+
+**PASS (machine completion); independent operator reading/visual acceptance
+remains pending.** The same job continued with its original MinerU batch ID;
+no replacement recognition submission or upload was issued. It completed
+**98/98 translation chunks, zero failed or unfinished**, and published a
+350-page reflowed PDF of 28,497,498 bytes with 195,748 CJK characters and an
+empty author field. `assess_pdf_completion` confirms the PDF/report identity,
+source coverage, block accounting, and completed translated-body counters.
+
+The output text contains exactly five explicit untranslated inline-formula
+paragraph labels and twenty-one untranslated table labels. The sidecar records
+26 source-preserved blocks; both it and the PDF remain private. This is not a
+claim that image pixels, these whole formula paragraphs, or table bodies were
+translated, nor proof of recognition accuracy or semantic translation quality.
+
+The source-preservation fix passed 1,145 PDF/MinerU regressions. The additional
+local-archive continuation fix passed 63 continuation/recognition/state tests,
+including no extra provider requests for a saved archive and refusal of a
+corrupted archive. Configured commit gates passed. The latter optimization was
+verified while the book's already-running continuation finished; that live
+attempt did re-download the existing batch's result, and is not represented as
+a live proof of the new local-archive path.
 
 ## Redaction and data handling
 
