@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .cache import CachedBlock, MineruCache
 
 CONTENTS_TITLES = {"contents", "table of contents", "inhaltsverzeichnis", "目录", "目錄"}
+SECTION_LABELS = {"anhang", "appendix", "appendices", "references", "bibliography", "附录", "附錄"}
 
 
 @dataclass(frozen=True)
@@ -255,7 +256,8 @@ def _contents_page(records: list[dict]) -> bool:
             rows += len(recovered)
         elif re.search(r"\s\d+\s*$", text):
             rows += sum(bool(re.search(r"\s\d+\s*$", line)) for line in text.splitlines())
-        elif "\n" in text or len(text) > 100:
+        elif ("\n" in text or len(text) > 100 or
+              (record.get("type") != "title" and _normalized(text) not in SECTION_LABELS)):
             return False
     return rows >= 2
 
@@ -316,11 +318,12 @@ def plan_printed_toc(layout: Mapping[str, Any], cache: MineruCache) -> PrintedTo
         offset += len(records) + len(page.get("discarded_blocks", []))
     root = None
     for pi, pairs in by_page.items():
-        text_blocks = [b for _, b in pairs if b.text.strip()]
-        if (text_blocks and text_blocks[0].type == "title" and
-                _normalized(text_blocks[0].text) in CONTENTS_TITLES and
-                _contents_page([r for r, _ in pairs])):
-            root = text_blocks[0]
+        for position, (_, block) in enumerate(pairs):
+            if (block.type == "title" and _normalized(block.text) in CONTENTS_TITLES and
+                    _contents_page([r for r, _ in pairs[position:]])):
+                root = block
+                break
+        if root is not None:
             break
     if root is None:
         return None
@@ -338,7 +341,7 @@ def plan_printed_toc(layout: Mapping[str, Any], cache: MineruCache) -> PrintedTo
         if verified < 2:
             break
         selected.append(following)
-    if any(b.preservation_reason for pi in selected for _, b in by_page[pi]):
+    if any(b.preservation_reason for pi in selected for _, b in by_page[pi] if b.index > root.index):
         return None
     body = [b for b in cache.blocks if b.page_index > selected[-1]]
     headings = defaultdict(list)
@@ -349,7 +352,7 @@ def plan_printed_toc(layout: Mapping[str, Any], cache: MineruCache) -> PrintedTo
     planned, omitted = {}, set()
     for pi in selected:
         for record, block in by_page[pi]:
-            if block.index == root.index:
+            if block.index <= root.index:
                 continue
             if block.type == "image":
                 if not block.image_caption and not block.image_footnote:

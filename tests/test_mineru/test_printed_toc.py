@@ -140,3 +140,44 @@ def test_ordinary_pages_are_not_promoted_by_terminal_numbers(tmp_path):
     layout["pdf_info"][0]["para_blocks"][0] = text_block("Ordinary chapter", "title", level=1)
     path.write_text(json.dumps(layout), encoding="utf-8")
     assert load_local_result(root).printed_toc is None
+
+
+def test_contents_heading_after_a_prefix_keeps_prefix_content(tmp_path):
+    root = fixture(tmp_path)
+    path = root / "layout.json"
+    layout = json.loads(path.read_text(encoding="utf-8"))
+    layout["pdf_info"][0]["para_blocks"][:0] = [text_block("Running header", "header"),
+                                                        text_block("Read this note.")]
+    path.write_text(json.dumps(layout), encoding="utf-8")
+    out = tmp_path / "out"
+    assert export(root, out) == 0
+    xml, report = artifacts(out)
+    assert report["printed_toc"]["linked_entries"] == 8
+    assert "Read this note." in "".join(xml["OEBPS/text-1.xhtml"].itertext())
+
+
+def test_ordinary_note_prevents_continuation_admission(tmp_path):
+    root = fixture(tmp_path)
+    path = root / "layout.json"
+    layout = json.loads(path.read_text(encoding="utf-8"))
+    layout["pdf_info"][1]["para_blocks"] = [text_block("Alpha 9"), text_block("Other 11"),
+                                                   text_block("An ordinary note.")]
+    layout["pdf_info"][2]["para_blocks"] += [text_block("Alpha", "title"), text_block("Other", "title")]
+    path.write_text(json.dumps(layout), encoding="utf-8")
+    assert load_local_result(root).printed_toc.pages == (1,)
+
+
+def test_unresolved_only_contents_still_reports_scope_and_image_omissions(tmp_path):
+    root = fixture(tmp_path, unknown=True)
+    path = root / "layout.json"
+    layout = json.loads(path.read_text(encoding="utf-8"))
+    records = layout["pdf_info"][0]["para_blocks"]
+    layout["pdf_info"][0]["para_blocks"] = [records[0], records[2], records[3]]
+    path.write_text(json.dumps(layout), encoding="utf-8")
+    out = tmp_path / "out"
+    assert export(root, out) == 0
+    _, report = artifacts(out)
+    plan = report["printed_toc"]
+    assert plan["pages"] == [1] and plan["entries"] == 0
+    assert plan["omitted_images"] and plan["blocks"][0]["proof"]["unresolved"]
+    assert report["counts"]["blocks_unaccounted"] == 0

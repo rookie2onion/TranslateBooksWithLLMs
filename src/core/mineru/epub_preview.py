@@ -220,7 +220,7 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
                          for x in reconstruction.findings],
             "reader_check": {"performed": False},
         }
-        if cache.printed_toc and reconstruction.printed_toc_entries:
+        if cache.printed_toc:
             plan = cache.printed_toc
             provenance = {p.output_index: p for p in reconstruction.provenance if p.output_index is not None}
             report["printed_toc"] = {
