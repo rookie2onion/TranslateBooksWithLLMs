@@ -27,3 +27,26 @@ Focused command-boundary regressions cover mixed source fragments, positioned co
 The other supplied legal handout remains a conversion regression sample. Documents without a proven contents region use the ordinary export path. This is not a promise to recover arbitrary contents tables, missing words or source typography.
 
 The disposable demo stays on `codex/prototype-mineru-toc-validation`, last accepted commit `b389f25`. Its code and HTML shell are not dependencies of production and are not merged into main. The accepted decisions are captured here.
+
+## Production validation, 2026-10-20
+
+- Integration commits: `78e4d36` and `d3e9fb5`, based on `9e8c7a1`.
+- The production command automatically selected Stadtplanung's physical pages 6–7: 75 entries, 75 valid links, zero contents image placements, and all 3,147 source blocks accounted for. Entry order and literal labels match the accepted prototype exactly. The 16 other body documents preserve their DOM content/order and image bytes after ignoring anchor identifiers.
+- MuPDF reflow produced three normal contents pages (600 × 800, 12 pt) and eight narrow pages (420 × 640, 18 pt), with no horizontal text clipping. The actual recovered mixed group was visually inspected.
+- The supplied criminal-law handout retains all 171 recognized blocks with no unaccounted content. No contents plan was admitted, and its body documents/image bytes match the prior export.
+- After the review fixes, a fresh production export was byte-identical to the already validated EPUB. Private artifacts and the detailed acceptance result remain under ignored `data/local-epub/stadtplanung-production-toc/`; the legal regression export is under `data/local-epub/legal-handout-production-toc/`.
+- Eight new command-boundary regressions plus the 16 existing local EPUB cases pass. Focused Mypy passes for the five affected source modules. Required repository commit checks pass.
+
+## Standards
+
+Independent review of `9e8c7a1...78e4d36` found no hard violations of `CLAUDE.md` or `docs/agents/validation.md`, and no additional actionable baseline smell or correctness issue. Benchmark-only contribution guidance was not applicable.
+
+The delta review `78e4d36...d3e9fb5` found no actionable standards findings: no secrets, language-policy violations, root scripts or review-process issues were introduced, and the changes remain consistent with the documented standards.
+
+## Spec
+
+The first review identified three edge cases: a prefix before the named heading disabled admission; ordinary short prose could be mistaken for continuation content; and a zero-entry plan omitted the directory-specific report.
+
+The fixes keep prefixes outside the plan, reject ordinary non-title continuation prose unless it is a recognized section label, and serialize every admitted plan even when no entries are recovered. Three command-boundary regressions cover these cases. Independent delta review confirmed all three findings resolved and found no remaining concrete defect or scope creep within the changed behavior.
+
+Final findings: Standards 0 (worst: none); Spec 0 (worst: none).
