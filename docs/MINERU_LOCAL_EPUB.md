@@ -33,6 +33,14 @@ These image-backed regions remain visible but are not selectable/searchable as t
 
 For merged text whose source spans extend beyond the parent rectangle, the exporter checks the companion physical-block identities and text correspondence before cropping every contributing region in reading order. Cross-page span geometry must be covered on the appropriate source page. If that mapping is unavailable or inconsistent, export stops. A figure whose caption occupies another column uses separate associated child regions rather than a large rectangle containing unrelated text. The regions are assembled into one source image and listed individually in the report.
 
+## Printed contents
+
+The ordinary local export command automatically restores a conservatively recognized printed contents region as reflowable text with internal links. It uses the layout's text, positions, printed page labels, and matching body content; it needs no additional recognition or model call. Caption-free images inside that proven contents region are omitted with an explicit report reason. Substantive captions and figures elsewhere remain preserved.
+
+Only confirmed destinations become links. Unresolved entries remain visible text, and uncertain recovery is recorded for review. Printed page labels remain source labels rather than EPUB page numbers. Arbitrary contents layouts and missing source wording are not guaranteed to recover.
+
+The report includes admitted contents pages, recovered entries, matching evidence, link targets, and intentional image omissions. The supplied Stadtplanung result produced 75 valid links across two source contents pages, with every recognized block accounted for. See the [accepted behavior and validation](plans/mineru-printed-toc.md).
+
 ## Report and failures
 
 The report includes recognized page/block counts, per-block dispositions, justified exclusions, findings, source-image fallbacks, and available source fingerprints. Coverage means coverage of the supplied recognition result. Page-count agreement with a bundled PDF is reported separately and is not a claim that recognition was accurate.

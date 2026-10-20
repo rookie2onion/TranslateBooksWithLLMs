@@ -9,7 +9,7 @@ https://github.com/user-attachments/assets/b09e7335-0821-4627-bb6a-9067de132cfa
 
 <div align="center">
 
-[![Download Windows](https://img.shields.io/badge/Download-Windows-blue?style=for-the-badge&logo=windows)](https://github.com/hydropix/TranslateBooksWithLLMs/releases/latest/download/TranslateBook-Windows.zip) [![Download macOS Intel](https://img.shields.io/badge/Download-macOS%20Intel-black?style=for-the-badge&logo=apple)](https://github.com/hydropix/TranslateBooksWithLLMs/releases/latest/download/TranslateBook-macOS-Intel.zip) [![Download macOS Apple Silicon](https://img.shields.io/badge/Download-macOS%20M1%2FM2%2FM3%2FM4-black?style=for-the-badge&logo=apple)](https://github.com/hydropix/TranslateBooksWithLLMs/releases/latest/download/TranslateBook-macOS-AppleSilicon.zip)
+[![Download Windows](https://img.shields.io/badge/Download-Windows-blue?style=for-the-badge&logo=windows)](https://github.com/rookie2onion/TranslateBooksWithLLMs/releases/latest/download/TranslateBook-Windows.zip) [![Download macOS Intel](https://img.shields.io/badge/Download-macOS%20Intel-black?style=for-the-badge&logo=apple)](https://github.com/rookie2onion/TranslateBooksWithLLMs/releases/latest/download/TranslateBook-macOS-Intel.zip) [![Download macOS Apple Silicon](https://img.shields.io/badge/Download-macOS%20M1%2FM2%2FM3%2FM4-black?style=for-the-badge&logo=apple)](https://github.com/rookie2onion/TranslateBooksWithLLMs/releases/latest/download/TranslateBook-macOS-AppleSilicon.zip)
 
 </div>
 
@@ -22,7 +22,8 @@ A desktop app that translates **books**, **subtitles**, and **documents** with A
 - **Resume anytime.** Interrupted translation? Pick up exactly where you left off. The checkpoint system saves progress automatically.
 - **Reusable writing styles.** Extract a style preset from sample books (or write one by hand) and apply it to every chunk for a consistent register, rhythm, and imagery across the whole translation.
 - **Auto glossary & style.** No glossary or preset ready? Pick Auto in the dropdown and the app derives both straight from the document being translated - one extra LLM call each before the job starts, nothing saved.
-- **PDF support.** Text PDFs are translated into a new, reflowed PDF: headings, paragraphs, lists and images are kept, ruled tables are rebuilt as tables, and paragraph colours, background boxes and the font family (serif, sans-serif, monospace) are preserved, but the original page layout is not, and bold or colour inside a sentence is not. Scanned PDFs are not supported (no OCR), multi-column layouts are best effort, and the refinement pass is not available for PDF yet.
+- **MinerU PDF support.** Translate text or scanned PDFs using online MinerU recognition with explicit upload authorization and `MINERU_API_TOKEN`. The output is reflowed; figures/captions and substantive notes are retained, while tables and formula regions remain clearly marked untranslated source images. Online tasks support up to 200 pages; [longer books need separate volumes](docs/plans/mineru-over-200-pages-research.md).
+- **Local MinerU to EPUB.** [Export an existing layout JSON and assets](docs/MINERU_LOCAL_EPUB.md) to an original-language EPUB 3 and conversion report without network access or translation. Proven printed contents regions become text with confirmed internal links.
 
 <img width="1150" height="579" alt="image" src="https://github.com/user-attachments/assets/d7dfa806-830b-4405-8300-f10208943d22" />
 
@@ -33,7 +34,7 @@ A desktop app that translates **books**, **subtitles**, and **documents** with A
 
 ## Quick Start
 
-1. **Download** the release for your platform (buttons above), or grab it from the [releases page](https://github.com/hydropix/TranslateBooksWithLLMs/releases/latest).
+1. **Download** the release for your platform (buttons above), or grab it from the [releases page](https://github.com/rookie2onion/TranslateBooksWithLLMs/releases/latest).
 2. **Extract** the archive.
 3. **Run** `TranslateBook.exe` (Windows) or `./TranslateBook` (macOS).
 4. **Open** http://localhost:5000 in your browser.
