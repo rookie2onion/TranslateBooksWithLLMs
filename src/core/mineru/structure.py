@@ -25,6 +25,7 @@ from typing import Dict, List, Mapping, Optional, Set, Tuple
 from src.core.pdf.content import ParagraphFormat, PdfImage, PdfPlainContent
 
 from .cache import IMAGE_FORMATS, CachedBlock, MineruCache, PageInfo
+from .printed_toc import TocEntry
 
 TOP_BAND_RATIO = 0.12
 BOTTOM_BAND_RATIO = 0.88
@@ -141,6 +142,7 @@ class SourceContent:
     counts: Mapping[str, int]
     review_required: bool
     list_styles: Mapping[int, str] = field(default_factory=dict)
+    printed_toc_entries: Mapping[int, TocEntry] = field(default_factory=dict)
 
     def to_plain_content(self) -> PdfPlainContent:
         """Convert to the shared PDF content model without preview decoration.
@@ -205,7 +207,7 @@ def _plain_content(document: SourceContent | Reconstruction, *, title: str,
     )
 
 
-def adapt(cache: MineruCache) -> SourceContent:
+def adapt(cache: MineruCache, *, printed_toc: bool = False) -> SourceContent:
     """Build the canonical, preview-neutral source-order document."""
     paragraphs: List[str] = []
     styles: List[str] = []
@@ -216,6 +218,8 @@ def adapt(cache: MineruCache) -> SourceContent:
     images: Dict[int, List[ImageAsset]] = {}
     accounted: Set[int] = set()
     list_styles: Dict[int, str] = {}
+    toc_entries: Dict[int, TocEntry] = {}
+    toc = cache.printed_toc if printed_toc else None
 
     def emit(text: str, kind: str, style: str, fmt: ParagraphFormat,
              block: Optional[CachedBlock] = None, source_type: str = "") -> None:
@@ -270,6 +274,29 @@ def adapt(cache: MineruCache) -> SourceContent:
     for block in cache.blocks:
         page = cache.pages[block.page_index]
         text = block.text.strip()
+
+        if toc and block.index in toc.omitted_images:
+            exclude(block, "decorative_contents_image", "image omitted from text-only printed contents")
+            continue
+        if toc and block.index in toc.blocks:
+            planned = toc.blocks[block.index]
+            if planned.entries:
+                for entry in planned.entries:
+                    index = len(paragraphs)
+                    toc_entries[index] = entry
+                    if not entry.group:
+                        list_styles[index] = "printed-toc"
+                    emit(entry.title + " " + entry.page_label,
+                         "printed_toc_group" if entry.group else "printed_toc_entry",
+                         "normal", ParagraphFormat(), block)
+            else:
+                kind = "printed_toc_label" if planned.group else "printed_toc_unresolved"
+                emit(planned.text, kind, "normal", ParagraphFormat(), block)
+                if "unresolved" in planned.proof:
+                    findings.append(Finding(code="printed_toc_unresolved", message=
+                        "Contents text could not be uniquely reconstructed; retained as unlinked text.",
+                        sample_page=block.page_index, block_index=block.index, severity="review"))
+            continue
 
         if block.preservation_reason in {"inline_formula_paragraph", "xml_control_character"}:
             xml_fallback = block.preservation_reason == "xml_control_character"
@@ -446,6 +473,7 @@ def adapt(cache: MineruCache) -> SourceContent:
         counts=counts,
         review_required=any(item.severity == "review" for item in findings),
         list_styles=list_styles,
+        printed_toc_entries=toc_entries,
     )
 
 

@@ -17,6 +17,8 @@ from typing import Any, Dict, Iterable, Mapping, Tuple
 from src.utils.atomic_io import atomic_path
 from src.utils.hashing import sha256_file
 
+from .printed_toc import PrintedToc
+
 KNOWN_BLOCK_TYPES = frozenset(
     {"title", "paragraph", "list", "image", "chart", "table", "equation_interline",
      "page_header", "page_footer", "page_footnote", "page_number", "page_aside_text"}
@@ -123,6 +125,7 @@ class MineruCache:
     engine_version: str
     fingerprints: Mapping[str, str] = field(default_factory=dict)
     generated_root: Path | None = None
+    printed_toc: PrintedToc | None = None
 
     def asset_reference(self, path: Path) -> str:
         """Name an admitted input asset or an output-owned generated crop."""

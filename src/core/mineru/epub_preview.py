@@ -39,7 +39,9 @@ _INLINE_TAGS = re.compile(r"(</?(?:sup|sub|em|strong|b|i)>)")
 _IMAGE_MEDIA_TYPES = {"png": "image/png", "jpeg": "image/jpeg"}
 
 _HEADING_TAGS = {f"heading{level}": f"h{level}" for level in range(1, 7)}
-_PARAGRAPH_CLASSES = {"notice": "notice", "caption": "caption", "footnote": "footnote"}
+_PARAGRAPH_CLASSES = {"notice": "notice", "caption": "caption", "footnote": "footnote",
+                      "printed_toc_group": "toc-group", "printed_toc_label": "toc-group",
+                      "printed_toc_unresolved": "toc-unresolved"}
 
 _CONTAINER_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -66,6 +68,11 @@ figure.image img { display: block; margin: 0 auto; }
 figcaption { font-size: 0.9em; text-align: start; margin-top: 0.4em; }
 ul.reference { list-style: none; padding-inline-start: 1em; }
 li { margin-bottom: 0.4em; }
+ol.printed-toc { list-style: none; padding: 0 0 0 1em; margin: .2em 0 1.2em; }
+ol.printed-toc li { text-align: start; line-height: 1.45; }
+p.toc-group { font-weight: bold; margin: 1.1em 0 .4em; break-after: avoid; }
+.toc-page { white-space: nowrap; color: #555; }
+p.toc-unresolved { white-space: pre-wrap; }
 """
 
 
@@ -115,7 +122,7 @@ def build_original_epub(cache: MineruCache, output_dir: Path, *,
     ensure_output_outside_cache(output_dir, cache.root)
     if not _LANGUAGE_TAG.fullmatch(language):
         raise MineruExportError("Pass a valid BCP-47 source language.")
-    source = adapt(cache)
+    source = adapt(cache, printed_toc=True)
     document_title = _INLINE_TAGS.sub("", title or source.title)
     if not document_title:
         raise MineruExportError("No recognized title; pass --title explicitly.")
@@ -132,6 +139,7 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
     images = _image_files(reconstruction)
     kinds = {item.output_index: item.kind for item in reconstruction.provenance
              if item.output_index is not None}
+    toc_targets, paragraph_anchors = _toc_targets(reconstruction, sections)
 
     entries: List[Tuple[str, bytes, int]] = [("mimetype", EPUB_MIMETYPE.encode("ascii"),
                                               zipfile.ZIP_STORED)]
@@ -149,7 +157,7 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
     for number, section in enumerate(sections, 1):
         entries.append((f"OEBPS/text-{number}.xhtml",
                         _section_document(reconstruction, section, number, language,
-                                          kinds, images).encode("utf-8"),
+                                          kinds, images, toc_targets, paragraph_anchors).encode("utf-8"),
                         zipfile.ZIP_DEFLATED))
     for name, (media_type, data) in sorted(images.items()):
         entries.append((f"OEBPS/{name}", data, zipfile.ZIP_DEFLATED))
@@ -212,6 +220,21 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
                          for x in reconstruction.findings],
             "reader_check": {"performed": False},
         }
+        if cache.printed_toc and reconstruction.printed_toc_entries:
+            plan = cache.printed_toc
+            provenance = {p.output_index: p for p in reconstruction.provenance if p.output_index is not None}
+            report["printed_toc"] = {
+                "pages": list(plan.pages), "entries": len(reconstruction.printed_toc_entries),
+                "linked_entries": sum(entry.target_block in toc_targets for entry in reconstruction.printed_toc_entries.values()),
+                "omitted_images": sorted(plan.omitted_images),
+                "blocks": [{"block": index, "method": block.method, "proof": dict(block.proof)}
+                           for index, block in plan.blocks.items()],
+                "entry_details": [{"block": provenance[index].block_index, "title": entry.title,
+                    "page_label": entry.page_label, "target_block": entry.target_block,
+                    "href": toc_targets.get(entry.target_block), "match_method": entry.match_method,
+                    "evidence": dict(entry.evidence), "source_spans": list(entry.source_spans),
+                    "source_ranges": [list(r) for r in entry.source_ranges], "label_range": entry.label_range}
+                    for index, entry in reconstruction.printed_toc_entries.items()]}
     else:
         report = build_provenance(cache, reconstruction, output_format="epub", output_stats=stats)
     try:
@@ -230,6 +253,25 @@ def _build_epub(cache: MineruCache, reconstruction: Reconstruction | SourceConte
         language=language,
         review_required=reconstruction.review_required,
     )
+
+
+def _toc_targets(source: Reconstruction | SourceContent, sections: Tuple[_Section, ...]) -> tuple[dict, dict]:
+    """Resolve source block locators only after final output indices exist."""
+    if not isinstance(source, SourceContent) or not source.printed_toc_entries:
+        return {}, {}
+    wanted = {entry.target_block for entry in source.printed_toc_entries.values() if entry.target_block is not None}
+    outputs = {index: number for number, section in enumerate(sections, 1) for index in section.indices}
+    targets, anchors = {}, {}
+    for item in source.provenance:
+        index = item.output_index
+        if (item.block_index not in wanted or index is None or item.block_index in targets
+                or item.kind not in {"heading", "paragraph"}):
+            continue
+        anchor = f"h{index}" if source.styles[index] in _HEADING_TAGS else f"p{index}"
+        targets[item.block_index] = f"text-{outputs[index]}.xhtml#{anchor}"
+        if source.styles[index] not in _HEADING_TAGS:
+            anchors[index] = anchor
+    return targets, anchors
 
 
 def _sections(reconstruction: Reconstruction | SourceContent,
@@ -274,7 +316,9 @@ def _image_name(asset: ImageAsset) -> str:
 
 def _section_document(reconstruction: Reconstruction | SourceContent, section: _Section, number: int,
                       language: str, kinds: Mapping[int, str],
-                      images: Mapping[str, Tuple[str, bytes]]) -> str:
+                      images: Mapping[str, Tuple[str, bytes]],
+                      toc_targets: Mapping[int, str] | None = None,
+                      paragraph_anchors: Mapping[int, str] | None = None) -> str:
     parts = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         "<!DOCTYPE html>",
@@ -311,6 +355,7 @@ def _section_document(reconstruction: Reconstruction | SourceContent, section: _
         for asset in reconstruction.images_by_paragraph.get(-1, ()):
             parts.append(figure(asset))
     open_list = ""
+    open_tag = ""
     for index in section.indices:
         if index in attached:
             for asset in reconstruction.images_by_paragraph.get(index, ()):
@@ -321,12 +366,20 @@ def _section_document(reconstruction: Reconstruction | SourceContent, section: _
         style = reconstruction.styles[index]
         list_kind = reconstruction.list_styles.get(index, "") if isinstance(
             reconstruction, SourceContent) else ""
+        if isinstance(reconstruction, SourceContent) and index in reconstruction.printed_toc_entries:
+            entry = reconstruction.printed_toc_entries[index]
+            rendered = _inline(entry.title)
+            href = toc_targets.get(entry.target_block) if toc_targets is not None and entry.target_block is not None else None
+            if href:
+                rendered = f'<a href="{_attr(href)}">{rendered}</a>'
+            rendered += f'\u00a0 <span class="toc-page">{escape(entry.page_label)}</span>'
         if open_list and list_kind != open_list:
-            parts.append("</ul>")
+            parts.append(f"</{open_tag}>")
             open_list = ""
         if list_kind:
             if not open_list:
-                parts.append(f'<ul class="{_attr(list_kind)}">')
+                open_tag = "ol" if list_kind == "printed-toc" else "ul"
+                parts.append(f'<{open_tag} class="{_attr(list_kind)}">')
                 open_list = list_kind
             parts.append(f"<li>{rendered}</li>")
         elif style in _HEADING_TAGS:
@@ -335,14 +388,16 @@ def _section_document(reconstruction: Reconstruction | SourceContent, section: _
         else:
             css_class = _PARAGRAPH_CLASSES.get(kinds.get(index, ""), "")
             class_attr = f' class="{css_class}"' if css_class else ""
-            parts.append(f"<p{class_attr}>{rendered}</p>")
+            anchor = (paragraph_anchors or {}).get(index)
+            id_attr = f' id="{anchor}"' if anchor else ""
+            parts.append(f"<p{class_attr}{id_attr}>{rendered}</p>")
         for asset in reconstruction.images_by_paragraph.get(index, ()):
             if open_list:
-                parts.append("</ul>")
+                parts.append(f"</{open_tag}>")
                 open_list = ""
             parts.append(figure(asset))
     if open_list:
-        parts.append("</ul>")
+        parts.append(f"</{open_tag}>")
     parts.extend(["</body>", "</html>"])
     return "\n".join(parts)
 

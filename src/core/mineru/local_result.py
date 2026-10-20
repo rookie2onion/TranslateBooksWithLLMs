@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -26,6 +27,7 @@ from .cache import (
     _source_crop,
     _verify_image,
 )
+from .printed_toc import plan_printed_toc
 
 RegionGroups = dict[tuple[int, int], tuple[dict, tuple[SourceRegion, ...]]]
 
@@ -80,12 +82,13 @@ def load_local_result(path: Path, *, source_pdf: Path | None = None,
         raise MineruCacheError("Local result exceeds the recognized text budget.")
     if source_pdf and sha256_file(source_pdf) != source_hash:
         raise MineruCacheError("The source PDF changed during reconstruction.")
-    return MineruCache(
+    cache = MineruCache(
         root=root, pages=pages, blocks=tuple(blocks), source_pages=tuple(source_pages),
         source_total_pages=len(pages), source_path="", source_sha256=source_hash,
         sample_sha256=fingerprints[layout_path.name], backend=str(layout.get("_backend", "")),
         engine_version=str(layout.get("_version_name", "")), fingerprints=fingerprints,
         generated_root=working_dir)
+    return replace(cache, printed_toc=plan_printed_toc(layout, cache))
 
 
 def _source_pdf(root: Path, explicit: Path | None,
